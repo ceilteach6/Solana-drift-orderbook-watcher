@@ -1,0 +1,12 @@
+# Drift Python SDK + Solana
+driftpy>=0.8.0
+solana>=0.30.0
+solders>=0.18.0
+anchorpy>=0.20.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
