@@ -60,6 +60,10 @@ class Settings:
     flicker_min_events: int = 3
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
+    spoof_window_sec: float = 10.0
+    spoof_wall_ratio: float = 5.0
+    spoof_min_price_move: float = 0.001
+    spoof_pull_fraction: float = 0.5
 
     # --- Risk aggregation ---
     risk_aggregation: bool = True
@@ -99,6 +103,10 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
+        spoof_window_sec=_get_float("SPOOF_WINDOW_SEC", 10.0),
+        spoof_wall_ratio=_get_float("SPOOF_WALL_RATIO", 5.0),
+        spoof_min_price_move=_get_float("SPOOF_MIN_PRICE_MOVE", 0.001),
+        spoof_pull_fraction=_get_float("SPOOF_PULL_FRACTION", 0.5),
         risk_aggregation=_get_str("RISK_AGGREGATION", "true").lower()
         not in ("0", "false", "no", "off"),
         risk_smoothing=_get_float("RISK_SMOOTHING", 0.4),

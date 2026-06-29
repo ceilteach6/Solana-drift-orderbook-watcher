@@ -57,6 +57,7 @@ nem avatkozik be. Prioritás szerinti felépítés:
 - `layering` — egyoldali fal (layering/spoofing)
 - `flicker` — gyors megjelenés/eltűnés (quote stuffing)
 - `imbalance` — erős egyoldali nyomás a top szinteken
+- `spoof_pull` — nagy fal visszahúzása ár-elmozdulással korrelálva (spoofing)
 
 ### Aggregáció ✅
 - **Risk-aggregátor** (`src/risk/aggregator.py`) — a detektorok score-jait
@@ -65,14 +66,12 @@ nem avatkozik be. Prioritás szerinti felépítés:
   (`RISK_AGGREGATION`); kikapcsolva a régi per-detekció mód fut. *(kész)*
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Spoof-pull detektor** — nagy fal jelenik meg, majd közvetlenül egy
-   ár-elmozdulás *előtt* eltűnik (history-alapú korreláció a flicker fölött).
-2. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
+1. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
    perzisztálása, replay és utólagos elemzés. (DB_URL → user része.)
-3. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
+2. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
    gyanús viselkedésű makerek jelölése. (Adatforrás-link → user része.)
-4. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján.
 
 ### Riasztási csatornák

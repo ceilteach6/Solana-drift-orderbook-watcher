@@ -18,6 +18,7 @@ from src.detector.flicker import FlickerDetector
 from src.detector.imbalance import ImbalanceDetector
 from src.detector.layering import LayeringDetector
 from src.detector.repeated_size import RepeatedSizeDetector
+from src.detector.spoof_pull import SpoofPullDetector
 
 
 def make_settings(**overrides):
@@ -29,6 +30,10 @@ def make_settings(**overrides):
         flicker_min_events=3,
         imbalance_min_ratio=0.85,
         imbalance_min_levels=5,
+        spoof_window_sec=10.0,
+        spoof_wall_ratio=5.0,
+        spoof_min_price_move=0.001,
+        spoof_pull_fraction=0.5,
         alert_min_score=0.6,
         alert_format="console",
     )
@@ -151,6 +156,77 @@ def test_imbalance_quiet_on_balanced_book():
 def test_imbalance_quiet_on_empty_book():
     det = ImbalanceDetector(make_settings())
     assert det.analyze(snap(), []) == []
+
+
+# --------------------------------------------------------------------------- #
+# Spoof-pull
+# --------------------------------------------------------------------------- #
+def _prior_with_bid_wall(ts=0.0):
+    # mid = (99.9 + 100.1) / 2 = 100.0; a 50-size wall sits at 99.5
+    return snap(
+        bids=[(99.9, 1.0), (99.8, 1.0), (99.7, 1.0), (99.5, 50.0)],
+        asks=[(100.1, 1.0), (100.2, 1.0)],
+        ts=ts,
+    )
+
+
+def test_spoof_pull_fires_when_wall_pulled_and_price_moves():
+    det = SpoofPullDetector(make_settings())
+    prior = _prior_with_bid_wall(ts=0.0)
+    # Wall at 99.5 is gone; mid moved up to 100.3 (+0.3%).
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0), (100.0, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    detections = det.analyze(current, [prior])
+    assert len(detections) == 1
+    assert detections[0].details["side"] == "bid"
+    assert detections[0].details["wall_size"] == 50.0
+    assert detections[0].score > 0
+
+
+def test_spoof_pull_quiet_when_wall_persists():
+    det = SpoofPullDetector(make_settings())
+    prior = _prior_with_bid_wall(ts=0.0)
+    # Price moved, but the 99.5 wall is still there -> not pulled.
+    current = snap(
+        bids=[(100.2, 1.0), (100.0, 1.0), (99.5, 50.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    assert det.analyze(current, [prior]) == []
+
+
+def test_spoof_pull_quiet_without_price_move():
+    det = SpoofPullDetector(make_settings())
+    prior = _prior_with_bid_wall(ts=0.0)
+    # Wall gone, but mid is unchanged (~100.0) -> no correlated move.
+    current = snap(
+        bids=[(99.9, 1.0), (99.8, 1.0)],
+        asks=[(100.1, 1.0), (100.2, 1.0)],
+        ts=1.0,
+    )
+    assert det.analyze(current, [prior]) == []
+
+
+def test_spoof_pull_quiet_without_wall():
+    det = SpoofPullDetector(make_settings())
+    # No oversized wall in prior; price moves anyway.
+    prior = snap(
+        bids=[(99.9, 1.0), (99.8, 1.0), (99.7, 1.0)],
+        asks=[(100.1, 1.0), (100.2, 1.0)],
+        ts=0.0,
+    )
+    current = snap(
+        bids=[(100.2, 1.0)], asks=[(100.4, 1.0)], ts=1.0
+    )
+    assert det.analyze(current, [prior]) == []
+
+
+def test_spoof_pull_needs_history():
+    det = SpoofPullDetector(make_settings())
+    assert det.analyze(_prior_with_bid_wall(), []) == []
 
 
 if __name__ == "__main__":
