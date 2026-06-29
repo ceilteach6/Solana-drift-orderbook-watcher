@@ -33,6 +33,15 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_json(obj) -> str:
+    """Serialize to JSON, falling back to repr() on non-serializable objects."""
+    try:
+        return json.dumps(obj)
+    except (TypeError, ValueError):
+        logger.debug("Details not JSON-serializable, using repr fallback: %r", obj)
+        return json.dumps(repr(obj))
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS detections (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +54,15 @@ CREATE TABLE IF NOT EXISTS detections (
 );
 CREATE INDEX IF NOT EXISTS idx_det_ts     ON detections(ts);
 CREATE INDEX IF NOT EXISTS idx_det_market ON detections(market);
+
+CREATE TABLE IF NOT EXISTS wallet_reputation (
+    wallet    TEXT    PRIMARY KEY,
+    score     REAL    NOT NULL DEFAULT 0.0,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    last_seen REAL    NOT NULL,
+    blocked   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_rep_score ON wallet_reputation(score DESC);
 """
 
 
@@ -100,7 +118,7 @@ class SqliteStore:
                 detection.detector,
                 float(detection.score),
                 detection.message,
-                json.dumps(detection.details),
+                _safe_json(detection.details),
             ),
         )
         self._conn.commit()
@@ -203,3 +221,72 @@ class SqliteStore:
                 "SELECT COUNT(*) FROM detections WHERE market = ?", (market,)
             ).fetchone()[0]
         return self._conn.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
+
+    # ------------------------------------------------------------------ #
+    # Wallet reputation
+    # ------------------------------------------------------------------ #
+
+    def upsert_wallet(
+        self,
+        wallet: str,
+        score: float,
+        hit_count: int,
+        blocked: bool = False,
+    ) -> None:
+        """Insert or update a wallet's reputation row."""
+        if self._conn is None:
+            return
+        self._conn.execute(
+            "INSERT INTO wallet_reputation(wallet, score, hit_count, last_seen, blocked) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(wallet) DO UPDATE SET "
+            "  score=excluded.score, hit_count=excluded.hit_count, "
+            "  last_seen=excluded.last_seen, blocked=excluded.blocked",
+            (wallet, float(score), hit_count, time.time(), int(blocked)),
+        )
+        self._conn.commit()
+
+    def load_wallets(self) -> list[dict]:
+        """Return all persisted wallet reputation rows."""
+        if self._conn is None:
+            return []
+        rows = self._conn.execute(
+            "SELECT wallet, score, hit_count, last_seen, blocked "
+            "FROM wallet_reputation ORDER BY score DESC"
+        ).fetchall()
+        return [
+            {
+                "wallet": r[0],
+                "score": r[1],
+                "hit_count": r[2],
+                "last_seen": r[3],
+                "blocked": bool(r[4]),
+            }
+            for r in rows
+        ]
+
+    def top_suspect_wallets(self, n: int = 10) -> list[dict]:
+        """Return the top N wallets by reputation score."""
+        if self._conn is None:
+            return []
+        rows = self._conn.execute(
+            "SELECT wallet, score, hit_count, last_seen, blocked "
+            "FROM wallet_reputation ORDER BY score DESC LIMIT ?",
+            (n,),
+        ).fetchall()
+        return [
+            {
+                "wallet": r[0],
+                "score": r[1],
+                "hit_count": r[2],
+                "last_seen": r[3],
+                "blocked": bool(r[4]),
+            }
+            for r in rows
+        ]
+
+    def wallet_count(self) -> int:
+        """Total number of tracked wallets."""
+        if self._conn is None:
+            return 0
+        return self._conn.execute("SELECT COUNT(*) FROM wallet_reputation").fetchone()[0]

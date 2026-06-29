@@ -19,6 +19,7 @@ from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
+from src.reputation.wallet_reputation import WalletReputation
 from src.risk_aggregator import RiskAggregator
 from src.storage.sqlite_store import SqliteStore
 
@@ -32,6 +33,7 @@ class Watcher:
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.risk = RiskAggregator(settings)
         self.store = SqliteStore(settings.db_path)
+        self.reputation = WalletReputation(settings, self.store)
         self._elevated: set[str] = set()  # markets currently above composite threshold
         self.feed = None
 
@@ -55,6 +57,7 @@ class Watcher:
         )
         self._banner()
         self.store.open()
+        self.reputation.load()
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
@@ -98,6 +101,15 @@ class Watcher:
         if detections:
             self.alert.emit(detections)
             await self.store.async_save_detections(detections)
+            for det in detections:
+                maker = det.details.get("maker")
+                if maker:
+                    rep = self.reputation.record(maker, det.score)
+                    if self.reputation.is_blocked(maker):
+                        logger.warning(
+                            "Blocked maker %s (reputation=%.3f, hits=%d)",
+                            maker, rep, self.reputation._hits.get(maker, 0)
+                        )
 
         # Emit a composite alert on the rising edge of the elevated threshold only,
         # to avoid repeat-firing every tick while risk stays high.

@@ -40,14 +40,19 @@ kész; csak az értékeket kell beírnod.
 | `src/detector/` — base + repeated_size, layering, flicker, imbalance, spoof_pull | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) | ✅ kész |
 | `src/risk_aggregator.py` — EMA per-market risk score + composite threshold | ✅ kész |
-| `src/storage/sqlite_store.py` — SQLite perzisztencia (DB_PATH env) | ✅ kész (új) |
-| `src/watcher.py` — orchestrator (risk + storage integrálva) | ✅ kész |
-| `tests/` — 41/41 teszt átment | ✅ kész |
+| `src/storage/sqlite_store.py` — SQLite perzisztencia (DB_PATH env) + wallet_reputation tábla | ✅ kész |
+| `src/reputation/wallet_reputation.py` — EMA reputáció + blocklist (BLOCKLIST_WALLETS env) | ✅ kész (új) |
+| `src/watcher.py` — orchestrator (risk + storage + reputation integrálva) | ✅ kész |
+| `tests/` — 61/61 teszt átment | ✅ kész |
 | **Bug-javítások** | |
 | `webhook_alert.py` — HTTP → daemon thread (nem blokkolja az event loop-ot) | ✅ javítva |
 | `flicker.py` — bid/ask szétválasztva a presence set-ben (false positive fix) | ✅ javítva |
 | `console_alert.py` — hiányzó ikonok hozzáadva (spoof_pull 🎭, risk_aggregator 🔴) | ✅ javítva |
 | `drift_client.py` — `inspect.isawaitable()` a `hasattr(__await__)` helyett | ✅ javítva |
+| `risk_aggregator.py` — per-tick INFO log eltávolítva (log spam fix) | ✅ javítva |
+| `sqlite_store.py` — `_safe_json()` helper: nem-szerializálható details kezelése | ✅ javítva |
+| `drift_client.py` — keypair betöltési hiba: try-except + érthetőerror üzenet | ✅ javítva |
+| `drift_client.py` — user_map + slot_subscriber teardown a close()-ban | ✅ javítva |
 
 ---
 
@@ -66,8 +71,7 @@ nem avatkozik be. Prioritás szerinti felépítés:
 1. ~~**Risk-aggregátor**~~ ✅ kész
 2. ~~**Spoof-pull detektor**~~ ✅ kész
 3. ~~**Time-series tárolás (SQLite)**~~ ✅ kész — `DB_PATH=drift_watcher.db`
-4. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
-   gyanús viselkedésű makerek jelölése. (Adatforrás-link → user része.)
+4. ~~**Wallet-szintű reputáció / blocklist**~~ ✅ kész — `BLOCKLIST_WALLETS`, `REPUTATION_DECAY`, `REPUTATION_BLOCK_THRESHOLD`; L3 maker adat szükséges a `details["maker"]`-hez
 5. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 6. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján.
