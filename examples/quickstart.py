@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.settings import load_settings
-from src.alert.console_alert import ConsoleAlert
+from src.alert import AlertDispatcher, ConsoleAlert
 from src.collector.orderbook_feed import SyntheticOrderbookFeed
 from src.detector import DEFAULT_DETECTORS
 
@@ -28,7 +28,7 @@ async def main() -> None:
     await feed.connect()
 
     detectors = [cls(settings) for cls in DEFAULT_DETECTORS]
-    alert = ConsoleAlert(settings)
+    alert = AlertDispatcher(settings, [ConsoleAlert(settings)])
     history: list = []
 
     print("Running 20 synthetic ticks...\n")

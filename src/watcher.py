@@ -15,7 +15,7 @@ import logging
 import time
 from collections import deque
 
-from src.alert.console_alert import ConsoleAlert
+from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 
@@ -26,7 +26,7 @@ class Watcher:
     def __init__(self, settings) -> None:
         self.settings = settings
         self.detectors = self._build_detectors(settings)
-        self.alert = ConsoleAlert(settings)
+        self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.feed = None
 
         # Keep enough history per market to cover the flicker window.
@@ -95,5 +95,6 @@ class Watcher:
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         print(f"   Interval  : {self.settings.update_frequency_ms} ms")
         print(f"   Alerts    : {self.settings.alert_format} "
-              f"(min score {self.settings.alert_min_score})")
+              f"(min score {self.settings.alert_min_score}) → "
+              f"{', '.join(s.name for s in self.alert.sinks)}")
         print("   Press Ctrl+C to stop.\n")

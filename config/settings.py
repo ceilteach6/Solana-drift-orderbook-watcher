@@ -58,10 +58,16 @@ class Settings:
     layering_min_levels: int = 5
     flicker_window_sec: float = 5.0
     flicker_min_events: int = 3
+    imbalance_min_ratio: float = 0.85
+    imbalance_min_levels: int = 5
 
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
+    # Webhook credentials/links are the user's part (see docs/NOTES.md).
+    alert_webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     # --- Run control ---
     run_duration_sec: float = 0.0
@@ -84,8 +90,13 @@ def load_settings() -> Settings:
         layering_min_levels=_get_int("LAYERING_MIN_LEVELS", 5),
         flicker_window_sec=_get_float("FLICKER_WINDOW_SEC", 5.0),
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
+        imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
+        imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
+        alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
+        telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 

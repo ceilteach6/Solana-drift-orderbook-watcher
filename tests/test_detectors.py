@@ -15,6 +15,7 @@ import pytest
 
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector.flicker import FlickerDetector
+from src.detector.imbalance import ImbalanceDetector
 from src.detector.layering import LayeringDetector
 from src.detector.repeated_size import RepeatedSizeDetector
 
@@ -26,6 +27,8 @@ def make_settings(**overrides):
         layering_min_levels=5,
         flicker_window_sec=5.0,
         flicker_min_events=3,
+        imbalance_min_ratio=0.85,
+        imbalance_min_levels=5,
         alert_min_score=0.6,
         alert_format="console",
     )
@@ -119,6 +122,35 @@ def test_flicker_needs_minimum_samples():
     det = FlickerDetector(make_settings())
     s = snap(bids=[(100.0, 5.0)], asks=[(101.0, 1.0)])
     assert det.analyze(s, []) == []
+
+
+# --------------------------------------------------------------------------- #
+# Imbalance
+# --------------------------------------------------------------------------- #
+def test_imbalance_fires_on_one_sided_book():
+    det = ImbalanceDetector(make_settings(imbalance_min_ratio=0.85, imbalance_min_levels=5))
+    s = snap(
+        bids=[(100 - i, 100.0) for i in range(5)],  # heavy bid side
+        asks=[(101 + i, 1.0) for i in range(5)],
+    )
+    detections = det.analyze(s, [])
+    assert len(detections) == 1
+    assert detections[0].details["side"] == "bid"
+    assert detections[0].details["imbalance"] > 0.85
+
+
+def test_imbalance_quiet_on_balanced_book():
+    det = ImbalanceDetector(make_settings(imbalance_min_ratio=0.85, imbalance_min_levels=5))
+    s = snap(
+        bids=[(100 - i, 10.0) for i in range(5)],
+        asks=[(101 + i, 10.0) for i in range(5)],
+    )
+    assert det.analyze(s, []) == []
+
+
+def test_imbalance_quiet_on_empty_book():
+    det = ImbalanceDetector(make_settings())
+    assert det.analyze(snap(), []) == []
 
 
 if __name__ == "__main__":

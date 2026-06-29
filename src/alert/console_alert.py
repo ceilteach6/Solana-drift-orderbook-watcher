@@ -1,8 +1,10 @@
 """
 src/alert/console_alert.py
 
-Outputs detections to stdout, either as human-readable lines or as JSON
-(one object per line). Detections below ``ALERT_MIN_SCORE`` are suppressed.
+Console alert sink: prints each detection to stdout, either human-readable or
+as JSON (one object per line), controlled by ``ALERT_FORMAT``.
+
+Score filtering is handled upstream by :class:`AlertDispatcher`.
 """
 
 from __future__ import annotations
@@ -10,29 +12,24 @@ from __future__ import annotations
 import json
 import time
 
+from src.alert.base import Alert
+
 _ICONS = {
     "repeated_size": "♻️",
     "layering": "🧱",
     "flicker": "✨",
+    "imbalance": "⚖️",
 }
 
 
-class ConsoleAlert:
-    def __init__(self, settings) -> None:
-        self.settings = settings
+class ConsoleAlert(Alert):
+    name = "console"
 
-    def emit(self, detections) -> int:
-        """Print qualifying detections. Returns how many were emitted."""
-        emitted = 0
-        for d in detections:
-            if d.score < self.settings.alert_min_score:
-                continue
-            if self.settings.alert_format == "json":
-                self._emit_json(d)
-            else:
-                self._emit_console(d)
-            emitted += 1
-        return emitted
+    def deliver(self, detection) -> None:
+        if self.settings.alert_format == "json":
+            self._emit_json(detection)
+        else:
+            self._emit_console(detection)
 
     def _emit_console(self, d) -> None:
         icon = _ICONS.get(d.detector, "⚠️")
