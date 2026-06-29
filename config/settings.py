@@ -77,6 +77,9 @@ class Settings:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # --- Storage ---
+    db_path: str = ""  # empty = disabled; e.g. "drift_watcher.db"
+
     # --- Run control ---
     run_duration_sec: float = 0.0
 
@@ -110,6 +113,7 @@ def load_settings() -> Settings:
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
+        db_path=_get_str("DB_PATH", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 
