@@ -40,7 +40,8 @@ kész; csak az értékeket kell beírnod.
 | `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
 | `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
-| `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész (új) |
+| `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
+| `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |

@@ -95,6 +95,15 @@ cp config.example.env .env
 python main.py
 ```
 
+### Self-test (no network)
+Verify every detector fires on a known manipulation pattern — useful before
+going live with a real RPC:
+```bash
+python main.py --selftest
+```
+Set `HEALTHCHECK_ENABLED=true` to re-run this check periodically while watching,
+alerting if any detector stops firing.
+
 ---
 
 ## 🔧 How the Drift integration works

@@ -18,7 +18,9 @@ from collections import deque
 from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
+from src.detector.base import Detection
 from src.risk import RiskAggregator
+from src.selftest import run_selftest
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +62,42 @@ class Watcher:
         interval = self.settings.update_frequency_ms / 1000
         start = time.monotonic()
         duration = self.settings.run_duration_sec
+        self._last_healthcheck = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
+            self._maybe_healthcheck()
+
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
                 return
             await asyncio.sleep(interval)
+
+    def _maybe_healthcheck(self) -> None:
+        if not self.settings.healthcheck_enabled:
+            return
+        now = time.monotonic()
+        if now - self._last_healthcheck < self.settings.healthcheck_interval_sec:
+            return
+        self._last_healthcheck = now
+
+        results = run_selftest(self.settings)
+        failed = [r.name for r in results if not r.passed]
+        if failed:
+            logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
+            self.alert.emit([
+                Detection(
+                    detector="healthcheck",
+                    market="-",
+                    score=1.0,
+                    message=f"Self-test failed: {', '.join(failed)} not firing",
+                    details={"failed": failed},
+                )
+            ])
+        else:
+            logger.debug("Health-check OK (%d checks passed)", len(results))
 
     async def _tick(self, market: str) -> None:
         try:
@@ -107,4 +136,7 @@ class Watcher:
         print(f"   Alerts    : {self.settings.alert_format} "
               f"(min score {self.settings.alert_min_score}) → "
               f"{', '.join(s.name for s in self.alert.sinks)}")
+        if self.settings.healthcheck_enabled:
+            print(f"   Health    : self-test every "
+                  f"{self.settings.healthcheck_interval_sec:.0f}s")
         print("   Press Ctrl+C to stop.\n")

@@ -72,6 +72,10 @@ class Settings:
     risk_clear_threshold: float = 0.4
     risk_alert_cooldown_sec: float = 30.0
 
+    # --- Health-check (periodic in-process self-test) ---
+    healthcheck_enabled: bool = False
+    healthcheck_interval_sec: float = 300.0
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -113,6 +117,9 @@ def load_settings() -> Settings:
         risk_alert_threshold=_get_float("RISK_ALERT_THRESHOLD", 0.6),
         risk_clear_threshold=_get_float("RISK_CLEAR_THRESHOLD", 0.4),
         risk_alert_cooldown_sec=_get_float("RISK_ALERT_COOLDOWN_SEC", 30.0),
+        healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
