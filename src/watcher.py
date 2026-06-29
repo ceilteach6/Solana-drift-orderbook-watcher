@@ -1,0 +1,99 @@
+"""
+src/watcher.py
+
+Main orchestrator. Wires the orderbook feed, detector stack, and alert sink
+together, then polls each market on a fixed interval and emits alerts.
+
+This is the file you edit to register a new detector: add it to
+``_build_detectors``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import deque
+
+from src.alert.console_alert import ConsoleAlert
+from src.collector.orderbook_feed import create_feed
+from src.detector import DEFAULT_DETECTORS
+
+logger = logging.getLogger(__name__)
+
+
+class Watcher:
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self.detectors = self._build_detectors(settings)
+        self.alert = ConsoleAlert(settings)
+        self.feed = None
+
+        # Keep enough history per market to cover the flicker window.
+        interval = max(settings.update_frequency_ms / 1000, 0.001)
+        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        self._history: dict[str, deque] = {
+            market: deque(maxlen=history_len) for market in settings.markets
+        }
+
+    @staticmethod
+    def _build_detectors(settings) -> list:
+        # Register your own detector by adding it here.
+        return [cls(settings) for cls in DEFAULT_DETECTORS]
+
+    async def start(self) -> None:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        self._banner()
+        self.feed = await create_feed(self.settings)
+        try:
+            await self._run_loop()
+        finally:
+            await self.feed.close()
+
+    async def _run_loop(self) -> None:
+        interval = self.settings.update_frequency_ms / 1000
+        start = time.monotonic()
+        duration = self.settings.run_duration_sec
+
+        while True:
+            for market in self.settings.markets:
+                await self._tick(market)
+
+            if duration and (time.monotonic() - start) >= duration:
+                logger.info("Run duration reached (%.0fs) — stopping.", duration)
+                return
+            await asyncio.sleep(interval)
+
+    async def _tick(self, market: str) -> None:
+        try:
+            snapshot = await self.feed.get_snapshot(market)
+        except Exception as exc:  # one bad poll shouldn't kill the watcher
+            logger.warning("Snapshot failed for %s: %s", market, exc)
+            return
+        if snapshot is None:
+            return
+
+        history = self._history[market]
+        detections = []
+        for detector in self.detectors:
+            try:
+                detections.extend(detector.analyze(snapshot, history))
+            except Exception:
+                logger.exception("Detector %s raised on %s", detector.name, market)
+        history.append(snapshot)
+
+        if detections:
+            self.alert.emit(detections)
+
+    def _banner(self) -> None:
+        print("🔭 Drift Orderbook Watcher — read-only")
+        print(f"   Markets   : {', '.join(self.settings.markets)}")
+        print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
+        print(f"   Interval  : {self.settings.update_frequency_ms} ms")
+        print(f"   Alerts    : {self.settings.alert_format} "
+              f"(min score {self.settings.alert_min_score})")
+        print("   Press Ctrl+C to stop.\n")
