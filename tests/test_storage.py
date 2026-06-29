@@ -177,3 +177,10 @@ def test_async_noop_on_disabled_store():
         await s.async_save_detection(make_detection())
 
     asyncio.run(run())  # must not raise
+
+
+def test_batch_save_non_serializable_details_does_not_raise(store):
+    """save_detections must use _safe_json — not raw json.dumps — on every item."""
+    det = make_detection(details={"obj": object()})
+    store.save_detections([det])  # must not raise TypeError
+    assert store.count() == 1
