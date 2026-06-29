@@ -1,5 +1,5 @@
-"""Persistence layer — stores detections to SQLite."""
+"""Persistence layer (time-series storage)."""
 
-from src.storage.sqlite_store import SqliteStore
+from src.storage.sqlite_store import SQLiteStore, Store
 
-__all__ = ["SqliteStore"]
+__all__ = ["Store", "SQLiteStore"]

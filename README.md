@@ -95,6 +95,31 @@ cp config.example.env .env
 python main.py
 ```
 
+### Self-test (no network)
+Verify every detector fires on a known manipulation pattern — useful before
+going live with a real RPC:
+```bash
+python main.py --selftest
+```
+Set `HEALTHCHECK_ENABLED=true` to re-run this check periodically while watching,
+alerting if any detector stops firing.
+
+### Persist the time-series (optional)
+Set `STORAGE_ENABLED=true` to record detections and risk scores to SQLite
+(`DB_PATH`, default `data/watcher.db`). Inspect what was collected:
+```bash
+python main.py --dbstats
+```
+This is the foundation for replay, analytics, and a charting dashboard.
+
+### Dashboard (TradingView Lightweight Charts)
+With storage enabled and some data collected, serve the chart UI:
+```bash
+python main.py --dashboard      # then open http://127.0.0.1:8787
+```
+Shows the mid price with detection markers and a risk-level panel, reading
+straight from the SQLite store (the watcher can keep writing concurrently).
+
 ---
 
 ## 🔧 How the Drift integration works

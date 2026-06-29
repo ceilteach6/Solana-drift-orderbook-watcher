@@ -60,14 +60,30 @@ class Settings:
     flicker_min_events: int = 3
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
-    # Spoof-pull detector
-    spoof_pull_levels: int = 5
-    spoof_pull_vol_ratio: float = 0.50
-    spoof_pull_price_delta: float = 0.001
+    spoof_window_sec: float = 10.0
+    spoof_wall_ratio: float = 5.0
+    spoof_min_price_move: float = 0.001
+    spoof_pull_fraction: float = 0.5
 
-    # --- Risk aggregator ---
-    risk_ema_alpha: float = 0.30
-    risk_composite_threshold: float = 0.70
+    # --- Risk aggregation ---
+    risk_aggregation: bool = True
+    risk_smoothing: float = 0.4  # EMA alpha (0..1); higher = more reactive
+    risk_alert_threshold: float = 0.6
+    risk_clear_threshold: float = 0.4
+    risk_alert_cooldown_sec: float = 30.0
+
+    # --- Health-check (periodic in-process self-test) ---
+    healthcheck_enabled: bool = False
+    healthcheck_interval_sec: float = 300.0
+
+    # --- Storage (time-series persistence) ---
+    storage_enabled: bool = False
+    db_path: str = "data/watcher.db"
+    persist_snapshots: bool = False  # high volume; off by default
+
+    # --- Dashboard ---
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8787
 
     # --- Alerting ---
     alert_min_score: float = 0.6
@@ -76,9 +92,6 @@ class Settings:
     alert_webhook_url: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-
-    # --- Storage ---
-    db_path: str = ""  # empty = disabled; e.g. "drift_watcher.db"
 
     # --- Run control ---
     run_duration_sec: float = 0.0
@@ -103,17 +116,31 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
-        spoof_pull_levels=_get_int("SPOOF_PULL_LEVELS", 5),
-        spoof_pull_vol_ratio=_get_float("SPOOF_PULL_VOL_RATIO", 0.50),
-        spoof_pull_price_delta=_get_float("SPOOF_PULL_PRICE_DELTA", 0.001),
-        risk_ema_alpha=_get_float("RISK_EMA_ALPHA", 0.30),
-        risk_composite_threshold=_get_float("RISK_COMPOSITE_THRESHOLD", 0.70),
+        spoof_window_sec=_get_float("SPOOF_WINDOW_SEC", 10.0),
+        spoof_wall_ratio=_get_float("SPOOF_WALL_RATIO", 5.0),
+        spoof_min_price_move=_get_float("SPOOF_MIN_PRICE_MOVE", 0.001),
+        spoof_pull_fraction=_get_float("SPOOF_PULL_FRACTION", 0.5),
+        risk_aggregation=_get_str("RISK_AGGREGATION", "true").lower()
+        not in ("0", "false", "no", "off"),
+        risk_smoothing=_get_float("RISK_SMOOTHING", 0.4),
+        risk_alert_threshold=_get_float("RISK_ALERT_THRESHOLD", 0.6),
+        risk_clear_threshold=_get_float("RISK_CLEAR_THRESHOLD", 0.4),
+        risk_alert_cooldown_sec=_get_float("RISK_ALERT_COOLDOWN_SEC", 30.0),
+        healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
+        storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        db_path=_get_str("DB_PATH", "data/watcher.db"),
+        persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
+        in ("1", "true", "yes", "on"),
+        dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
+        dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
-        db_path=_get_str("DB_PATH", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 

@@ -1,205 +1,227 @@
 """
 src/storage/sqlite_store.py
 
-SQLite-backed detection store.
+Time-series persistence on top of stdlib ``sqlite3`` (no extra dependency).
 
-Enable by setting ``DB_PATH`` in your .env (e.g. ``DB_PATH=drift_watcher.db``).
-Leave it empty (the default) to run without any persistence — the store
-becomes a no-op so nothing else in the codebase needs to change.
+Three tables:
+- ``detections`` — every raw detector finding (low volume, always useful)
+- ``risk``       — the smoothed per-market risk score over time (chart panel)
+- ``snapshots``  — full L2 books (high volume; only when PERSIST_SNAPSHOTS=true)
 
-Schema (single table, append-only):
-
-    detections(id, ts, market, detector, score, message, details)
-
-The store is thread-safe (one connection per process, ``check_same_thread=False``
-is safe for our single-writer pattern). The async helper wraps the blocking
-call in ``asyncio.to_thread`` so it never blocks the event loop.
-
-Query helper::
-
-    rows = store.query_recent(market="SOL-PERP", limit=50)
-    for r in rows:
-        print(r["ts"], r["detector"], r["score"])
+This is the foundation for replay, analytics, a metrics exporter, and the
+TradingView-style dashboard (which reads price + risk + detection markers back
+out of here). The DB file lives under ``data/`` which ``.gitignore`` excludes.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
+import os
 import sqlite3
-import time
-from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS detections (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts        REAL    NOT NULL,
-    market    TEXT    NOT NULL,
-    detector  TEXT    NOT NULL,
-    score     REAL    NOT NULL,
-    message   TEXT    NOT NULL,
-    details   TEXT    NOT NULL
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS snapshots (
+    id        INTEGER PRIMARY KEY,
+    market    TEXT NOT NULL,
+    ts        REAL NOT NULL,
+    mid       REAL,
+    best_bid  REAL,
+    best_ask  REAL,
+    spread    REAL,
+    bids      TEXT,
+    asks      TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_det_ts     ON detections(ts);
-CREATE INDEX IF NOT EXISTS idx_det_market ON detections(market);
+CREATE INDEX IF NOT EXISTS idx_snapshots_market_ts ON snapshots(market, ts);
+
+CREATE TABLE IF NOT EXISTS detections (
+    id        INTEGER PRIMARY KEY,
+    market    TEXT NOT NULL,
+    ts        REAL NOT NULL,
+    detector  TEXT NOT NULL,
+    score     REAL NOT NULL,
+    message   TEXT,
+    details   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_detections_market_ts ON detections(market, ts);
+CREATE INDEX IF NOT EXISTS idx_detections_detector ON detections(detector);
+
+CREATE TABLE IF NOT EXISTS risk (
+    id        INTEGER PRIMARY KEY,
+    market    TEXT NOT NULL,
+    ts        REAL NOT NULL,
+    score     REAL NOT NULL,
+    mid       REAL
+);
+CREATE INDEX IF NOT EXISTS idx_risk_market_ts ON risk(market, ts);
 """
 
 
-class SqliteStore:
-    """Append-only SQLite store for :class:`Detection` objects.
+class Store:
+    """Persistence interface (so a Postgres backend can be dropped in later)."""
 
-    Pass ``db_path=""`` (or leave ``DB_PATH`` unset) to get a no-op instance
-    that silently discards all writes — safe to call unconditionally.
-    """
+    def connect(self) -> None:
+        raise NotImplementedError
 
-    def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
-        self._conn: sqlite3.Connection | None = None
+    def record_snapshot(self, snapshot) -> None:
+        raise NotImplementedError
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle
-    # ------------------------------------------------------------------ #
+    def record_detections(self, ts: float, detections) -> None:
+        raise NotImplementedError
 
-    def open(self) -> None:
-        """Open (or create) the database and apply the schema."""
-        if not self._db_path:
-            return
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.executescript(_DDL)
-        self._conn.commit()
-        logger.info("SQLite store opened: %s", self._db_path)
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+        raise NotImplementedError
 
     def close(self) -> None:
-        """Flush and close the database connection."""
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                logger.debug("Error closing SQLite connection", exc_info=True)
-            finally:
-                self._conn = None
+        raise NotImplementedError
+
+
+def _levels_to_json(levels) -> str:
+    return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
+
+
+class SQLiteStore(Store):
+    def __init__(self, db_path: str = "data/watcher.db") -> None:
+        self.db_path = db_path
+        self._conn: sqlite3.Connection | None = None
+
+    def connect(self) -> None:
+        if self.db_path not in (":memory:", ""):
+            parent = os.path.dirname(self.db_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.row_factory = sqlite3.Row
+        # WAL lets a dashboard read while the watcher writes.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.executescript(_SCHEMA)
+        self._conn.commit()
 
     # ------------------------------------------------------------------ #
-    # Write
-    # ------------------------------------------------------------------ #
-
-    def save_detection(self, detection) -> None:
-        """Persist one detection synchronously. No-op when DB is disabled."""
-        if self._conn is None:
-            return
+    def record_snapshot(self, snapshot) -> None:
+        best_bid = snapshot.bids[0].price if snapshot.bids else None
+        best_ask = snapshot.asks[0].price if snapshot.asks else None
+        spread = (best_ask - best_bid) if (best_bid and best_ask) else None
         self._conn.execute(
-            "INSERT INTO detections(ts, market, detector, score, message, details) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO snapshots(market, ts, mid, best_bid, best_ask, spread, bids, asks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                time.time(),
-                detection.market,
-                detection.detector,
-                float(detection.score),
-                detection.message,
-                json.dumps(detection.details),
+                snapshot.market,
+                snapshot.timestamp,
+                snapshot.mid,
+                best_bid,
+                best_ask,
+                spread,
+                _levels_to_json(snapshot.bids),
+                _levels_to_json(snapshot.asks),
             ),
         )
         self._conn.commit()
 
-    async def async_save_detection(self, detection) -> None:
-        """Non-blocking wrapper — runs ``save_detection`` in a thread pool."""
-        await asyncio.to_thread(self.save_detection, detection)
-
-    def save_detections(self, detections) -> None:
-        """Batch-persist multiple detections in a single transaction."""
-        if self._conn is None or not detections:
+    def record_detections(self, ts: float, detections) -> None:
+        """Record detections, stamped with the snapshot timestamp."""
+        rows = [
+            (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
+            for d in detections
+        ]
+        if not rows:
             return
-        now = time.time()
         self._conn.executemany(
-            "INSERT INTO detections(ts, market, detector, score, message, details) "
+            "INSERT INTO detections(market, ts, detector, score, message, details) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    now,
-                    d.market,
-                    d.detector,
-                    float(d.score),
-                    d.message,
-                    json.dumps(d.details),
-                )
-                for d in detections
-            ],
+            rows,
         )
         self._conn.commit()
 
-    async def async_save_detections(self, detections) -> None:
-        """Non-blocking batch write."""
-        await asyncio.to_thread(self.save_detections, detections)
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+        self._conn.execute(
+            "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
+            (market, ts, score, mid),
+        )
+        self._conn.commit()
 
     # ------------------------------------------------------------------ #
-    # Read
+    # Read APIs for the dashboard (bucketed to whole seconds so the chart
+    # gets unique, ascending time values).
     # ------------------------------------------------------------------ #
+    def markets(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM risk "
+            "UNION SELECT DISTINCT market FROM detections ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
 
-    def query_recent(
-        self,
-        *,
-        market: str | None = None,
-        detector: str | None = None,
-        min_score: float = 0.0,
-        limit: int = 100,
-    ) -> list[dict]:
-        """Return the most recent detections, newest first.
+    _ALLOWED_SERIES_COLUMNS = frozenset({"mid", "score"})
 
-        Args:
-            market:    Filter to a specific market (e.g. ``"SOL-PERP"``).
-            detector:  Filter to a specific detector name.
-            min_score: Only return rows with score >= this value.
-            limit:     Maximum number of rows returned.
+    def _series(self, column: str, market: str, limit: int):
+        if column not in self._ALLOWED_SERIES_COLUMNS:
+            raise ValueError(f"Invalid column: {column!r}")
+        cur = self._conn.execute(
+            f"SELECT CAST(ts AS INTEGER) AS sec, AVG({column}) AS v FROM risk "
+            f"WHERE market = ? AND {column} IS NOT NULL "
+            "GROUP BY sec ORDER BY sec DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = cur.fetchall()
+        rows.reverse()  # ascending for the chart
+        return [{"time": r["sec"], "value": r["v"]} for r in rows]
 
-        Returns:
-            List of dicts with keys: id, ts, market, detector, score,
-            message, details (already deserialized from JSON).
-        """
-        if self._conn is None:
-            return []
+    def price_series(self, market: str, limit: int = 2000):
+        return self._series("mid", market, limit)
 
-        clauses = ["score >= ?"]
-        params: list = [min_score]
+    def risk_series(self, market: str, limit: int = 2000):
+        return self._series("score", market, limit)
 
-        if market:
-            clauses.append("market = ?")
-            params.append(market)
-        if detector:
-            clauses.append("detector = ?")
-            params.append(detector)
-
-        where = " AND ".join(clauses)
-        params.append(limit)
-
-        rows = self._conn.execute(
-            f"SELECT id, ts, market, detector, score, message, details "
-            f"FROM detections WHERE {where} ORDER BY ts DESC LIMIT ?",
-            params,
-        ).fetchall()
-
+    def detection_markers(self, market: str, limit: int = 200):
+        cur = self._conn.execute(
+            "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
+            "WHERE market = ? ORDER BY id DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = list(cur.fetchall())
+        rows.reverse()
         return [
             {
-                "id": r[0],
-                "ts": r[1],
-                "market": r[2],
-                "detector": r[3],
-                "score": r[4],
-                "message": r[5],
-                "details": json.loads(r[6]),
+                "time": r["sec"],
+                "detector": r["detector"],
+                "score": r["score"],
+                "message": r["message"],
             }
             for r in rows
         ]
 
-    def count(self, *, market: str | None = None) -> int:
-        """Total number of stored detections (optionally filtered by market)."""
-        if self._conn is None:
-            return 0
-        if market:
-            return self._conn.execute(
-                "SELECT COUNT(*) FROM detections WHERE market = ?", (market,)
-            ).fetchone()[0]
-        return self._conn.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
+    # ------------------------------------------------------------------ #
+    def counts(self) -> dict[str, int]:
+        out = {}
+        for table in ("snapshots", "detections", "risk"):
+            cur = self._conn.execute(f"SELECT COUNT(*) AS n FROM {table}")
+            out[table] = cur.fetchone()["n"]
+        return out
+
+    def recent_detections(self, limit: int = 10) -> list[sqlite3.Row]:
+        cur = self._conn.execute(
+            "SELECT ts, market, detector, score, message FROM detections "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        return list(cur.fetchall())
+
+    def summary(self) -> str:
+        counts = self.counts()
+        lines = ["📦 Storage summary", f"   DB: {self.db_path}"]
+        for table, n in counts.items():
+            lines.append(f"   {table.ljust(11)}: {n} rows")
+        recent = self.recent_detections(5)
+        if recent:
+            lines.append("   recent detections:")
+            for r in recent:
+                lines.append(
+                    f"     {r['market']} {r['detector']} "
+                    f"(score {r['score']:.2f}) — {r['message']}"
+                )
+        return "\n".join(lines)
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.commit()
+            self._conn.close()
+            self._conn = None

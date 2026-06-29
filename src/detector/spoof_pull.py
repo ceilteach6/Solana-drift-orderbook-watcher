@@ -1,85 +1,111 @@
 """
 src/detector/spoof_pull.py
 
-Spoof-pull detector: a large order wall appears on one side of the book,
-then vanishes — and the price moves in the *opposite* direction immediately
-after (i.e. the wall was fake, creating the illusion of depth).
+Spoof-pull detector: the signature of a spoofer is a large "wall" placed on one
+side of the book to fake pressure, then **cancelled (pulled)** before it can be
+hit — typically as the price moves in the direction the wall was nudging.
 
-Pattern (bid-side example):
-  tick N  : heavy bid volume in top SPOOF_PULL_LEVELS levels
-  tick N+1: bid volume collapses by >= SPOOF_PULL_VOL_RATIO (50 % default)
-             AND mid price drops by >= SPOOF_PULL_PRICE_DELTA (0.1 % default)
+This is a refinement above the flicker detector: flicker catches rapid
+appear/disappear at a level; spoof-pull specifically catches a *large* wall that
+was present a moment ago, is now gone, **and** coincides with a real mid-price
+move over the window.
 
-This is a history-based detector and requires at least two prior snapshots.
+Heuristic per side:
+1. Find the biggest wall in the immediately-preceding snapshot — a level whose
+   size is at least ``SPOOF_WALL_RATIO`` × the median level size on that side.
+2. Check it was *pulled*: the size at that exact price has dropped below
+   ``SPOOF_PULL_FRACTION`` of the wall size in the current snapshot.
+3. Require a mid-price move of at least ``SPOOF_MIN_PRICE_MOVE`` (relative) over
+   the lookback window, so a wall that simply got filled isn't flagged.
 """
 
 from __future__ import annotations
 
+import statistics
+
 from src.detector.base import BaseDetector, Detection
+
+_PRICE_DECIMALS = 4
 
 
 class SpoofPullDetector(BaseDetector):
     name = "spoof_pull"
 
     def analyze(self, snapshot, history) -> list[Detection]:
-        if len(history) < 1:
+        window = self.settings.spoof_window_sec
+        now = snapshot.timestamp
+
+        prior = [s for s in list(history) if now - s.timestamp <= window]
+        prior.sort(key=lambda s: s.timestamp)
+        if not prior:
             return []
 
-        prev = history[-1]
-        curr = snapshot
-
-        if prev.mid is None or curr.mid is None or prev.mid == 0.0:
+        mid_now = snapshot.mid
+        mid_then = prior[0].mid
+        if not mid_now or not mid_then:
+            return []
+        price_move = (mid_now - mid_then) / mid_then
+        if abs(price_move) < self.settings.spoof_min_price_move:
             return []
 
-        n = self.settings.spoof_pull_levels
-        vol_ratio = self.settings.spoof_pull_vol_ratio
-        price_delta = self.settings.spoof_pull_price_delta
-
-        price_change = (curr.mid - prev.mid) / prev.mid  # signed fraction
-
+        previous = prior[-1]  # the snapshot just before the current one
         detections: list[Detection] = []
-
-        # Bid wall pulled → price drops  (price_sign = -1)
-        # Ask wall pulled → price rises  (price_sign = +1)
-        for side_name, prev_levels, curr_levels, price_sign in (
-            ("bid", prev.bids, curr.bids, -1),
-            ("ask", prev.asks, curr.asks, +1),
+        for side, prev_levels, cur_levels in (
+            ("bid", previous.bids, snapshot.bids),
+            ("ask", previous.asks, snapshot.asks),
         ):
-            prev_vol = sum(lvl.size for lvl in prev_levels[:n] if lvl.size > 0)
-            curr_vol = sum(lvl.size for lvl in curr_levels[:n] if lvl.size > 0)
-
-            if prev_vol <= 0:
+            wall = self._find_wall(prev_levels)
+            if wall is None:
                 continue
+            price_key, wall_size = wall
 
-            collapse = 1.0 - curr_vol / prev_vol
-            if collapse < vol_ratio:
-                continue  # wall didn't collapse enough
+            now_size = self._size_at(cur_levels, price_key)
+            if now_size >= wall_size * self.settings.spoof_pull_fraction:
+                continue  # wall is still (mostly) there — not pulled
 
-            # price moved away from where the fake wall was
-            # bid wall → expect price_change < 0 → price_change * (-1) > 0
-            # ask wall → expect price_change > 0 → price_change * (+1) > 0
-            if price_change * price_sign < price_delta:
-                continue  # price didn't move in expected direction
+            pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
+            move_factor = min(1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move))
+            score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
 
-            score = min(1.0, collapse * (price_change * price_sign) / price_delta)
             detections.append(
                 Detection(
                     detector=self.name,
                     market=snapshot.market,
                     score=score,
                     message=(
-                        f"Spoof-pull: {side_name} wall collapsed "
-                        f"({prev_vol:.2f} → {curr_vol:.2f}, -{collapse:.0%}) "
-                        f"while price moved {price_change:+.3%} — probable fake wall"
+                        f"{side} wall ~{wall_size:.4g} @ {price_key:.4g} pulled while "
+                        f"price moved {price_move:+.2%} — possible spoof"
                     ),
                     details={
-                        "side": side_name,
-                        "prev_vol": round(prev_vol, 4),
-                        "curr_vol": round(curr_vol, 4),
-                        "collapse_ratio": round(collapse, 4),
-                        "price_change_pct": round(price_change * 100, 4),
+                        "side": side,
+                        "wall_price": price_key,
+                        "wall_size": round(wall_size, 6),
+                        "remaining_size": round(now_size, 6),
+                        "price_move": round(price_move, 6),
                     },
                 )
             )
-
         return detections
+
+    def _find_wall(self, levels):
+        sizes = [lvl.size for lvl in levels if lvl.size > 0]
+        if len(sizes) < 2:
+            return None
+        median = statistics.median(sizes)
+        if median <= 0:
+            return None
+        threshold = self.settings.spoof_wall_ratio * median
+        candidates = [
+            (round(lvl.price, _PRICE_DECIMALS), lvl.size)
+            for lvl in levels
+            if lvl.size >= threshold
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pc: pc[1])
+
+    @staticmethod
+    def _size_at(levels, price_key: float) -> float:
+        return sum(
+            lvl.size for lvl in levels if round(lvl.price, _PRICE_DECIMALS) == price_key
+        )
