@@ -20,6 +20,7 @@ from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
 from src.risk_aggregator import RiskAggregator
+from src.storage.sqlite_store import SqliteStore
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class Watcher:
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.risk = RiskAggregator(settings)
+        self.store = SqliteStore(settings.db_path)
         self._elevated: set[str] = set()  # markets currently above composite threshold
         self.feed = None
 
@@ -52,11 +54,13 @@ class Watcher:
             datefmt="%H:%M:%S",
         )
         self._banner()
+        self.store.open()
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
         finally:
             await self.feed.close()
+            self.store.close()
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000
@@ -93,6 +97,7 @@ class Watcher:
         ema_score = self.risk.update(market, detections)
         if detections:
             self.alert.emit(detections)
+            await self.store.async_save_detections(detections)
 
         # Emit a composite alert on the rising edge of the elevated threshold only,
         # to avoid repeat-firing every tick while risk stays high.

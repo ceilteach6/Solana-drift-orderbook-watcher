@@ -31,15 +31,21 @@ class FlickerDetector(BaseDetector):
         if len(snaps) < 3:  # need a few samples to observe toggling
             return []
 
-        # Presence set of quantized prices per snapshot.
-        presence: list[set[float]] = []
-        all_keys: set[float] = set()
+        # Presence set of (side, quantized_price) tuples per snapshot.
+        # Tracking side separately prevents false positives when the same price
+        # migrates from bid to ask (e.g. after a large mid-price move).
+        presence: list[set[tuple]] = []
+        all_keys: set[tuple] = set()
         for s in snaps:
-            keys = {round(lvl.price, _PRICE_DECIMALS) for lvl in s.bids + s.asks}
+            keys: set[tuple] = set()
+            for lvl in s.bids:
+                keys.add(("bid", round(lvl.price, _PRICE_DECIMALS)))
+            for lvl in s.asks:
+                keys.add(("ask", round(lvl.price, _PRICE_DECIMALS)))
             presence.append(keys)
             all_keys |= keys
 
-        best_key: float | None = None
+        best_key: tuple | None = None
         best_transitions = 0
         for key in all_keys:
             seq = [key in keys for keys in presence]
@@ -52,6 +58,7 @@ class FlickerDetector(BaseDetector):
         if best_transitions < min_events:
             return []
 
+        side, price = best_key  # type: ignore[misc]
         score = min(1.0, best_transitions / (min_events * 2))
         return [
             Detection(
@@ -59,11 +66,12 @@ class FlickerDetector(BaseDetector):
                 market=snapshot.market,
                 score=score,
                 message=(
-                    f"Level @ {best_key:.4g} toggled {best_transitions}x in "
+                    f"{side.capitalize()} level @ {price:.4g} toggled {best_transitions}x in "
                     f"{window:.0f}s (threshold {min_events}) — order flicker"
                 ),
                 details={
-                    "price": best_key,
+                    "side": side,
+                    "price": price,
                     "transitions": best_transitions,
                     "window_sec": window,
                 },

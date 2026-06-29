@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import urllib.request
 
 from src.alert.base import Alert
@@ -37,9 +38,15 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
+        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
         payload, url = self._build_request(detection)
         if not url:
             return
+        threading.Thread(
+            target=self._send, args=(payload, url), daemon=True
+        ).start()
+
+    def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}

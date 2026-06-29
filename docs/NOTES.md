@@ -37,13 +37,17 @@ kész; csak az értékeket kell beírnod.
 |---|---|
 | `config/settings.py` — env-alapú konfiguráció | ✅ kész |
 | `src/collector/` — L2 modell + driftpy DLOB feed + szintetikus fallback | ✅ kész |
-| `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
-| `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
-| `src/detector/spoof_pull.py` — spoof-pull detektor (wall collapse + ármozgás) | ✅ kész (új) |
+| `src/detector/` — base + repeated_size, layering, flicker, imbalance, spoof_pull | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) | ✅ kész |
-| `src/risk_aggregator.py` — EMA per-market risk score + composite threshold | ✅ kész (új) |
-| `src/watcher.py` — orchestrator (risk aggregátor integrálva) | ✅ kész |
-| `examples/quickstart.py`, `tests/` — 24/24 teszt átment | ✅ kész |
+| `src/risk_aggregator.py` — EMA per-market risk score + composite threshold | ✅ kész |
+| `src/storage/sqlite_store.py` — SQLite perzisztencia (DB_PATH env) | ✅ kész (új) |
+| `src/watcher.py` — orchestrator (risk + storage integrálva) | ✅ kész |
+| `tests/` — 41/41 teszt átment | ✅ kész |
+| **Bug-javítások** | |
+| `webhook_alert.py` — HTTP → daemon thread (nem blokkolja az event loop-ot) | ✅ javítva |
+| `flicker.py` — bid/ask szétválasztva a presence set-ben (false positive fix) | ✅ javítva |
+| `console_alert.py` — hiányzó ikonok hozzáadva (spoof_pull 🎭, risk_aggregator 🔴) | ✅ javítva |
+| `drift_client.py` — `inspect.isawaitable()` a `hasattr(__await__)` helyett | ✅ javítva |
 
 ---
 
@@ -59,13 +63,9 @@ nem avatkozik be. Prioritás szerinti felépítés:
 - `imbalance` — erős egyoldali nyomás a top szinteken *(új)*
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Risk-aggregátor** — a detektorok score-jait piaconként egy összesített
-   kockázati pontszámmá vonja össze (idősoros simítással), hogy a riasztás ne
-   spammeljen, hanem egy stabil "gyanússági szint" legyen.
-2. **Spoof-pull detektor** — nagy fal jelenik meg, majd közvetlenül egy
-   ár-elmozdulás *előtt* eltűnik (history-alapú korreláció a flicker fölött).
-3. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
-   perzisztálása, replay és utólagos elemzés. (DB_URL → user része.)
+1. ~~**Risk-aggregátor**~~ ✅ kész
+2. ~~**Spoof-pull detektor**~~ ✅ kész
+3. ~~**Time-series tárolás (SQLite)**~~ ✅ kész — `DB_PATH=drift_watcher.db`
 4. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
    gyanús viselkedésű makerek jelölése. (Adatforrás-link → user része.)
 5. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
