@@ -43,7 +43,7 @@ class WebhookAlert(Alert):
         if not url:
             return
         data = json.dumps(payload).encode("utf-8")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._send, data, url)
 
     def _send(self, data: bytes, url: str) -> None:

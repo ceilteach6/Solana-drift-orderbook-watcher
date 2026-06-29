@@ -31,6 +31,7 @@ Indices on (ts), (market), (detector) keep queries fast for typical slices.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -84,22 +85,26 @@ class SqliteAlert(Alert):
             logger.exception("Failed to open SQLite database %r — sink disabled", self._path)
             self._conn = None
 
+    def _write_sync(self, ts: float, market: str, detector: str,
+                    score: float, message: str, details_json: str) -> None:
+        self._conn.execute(_INSERT, (ts, market, detector, score, message, details_json))
+        self._conn.commit()
+
     async def deliver(self, detection) -> None:
         if self._conn is None:
             return
         try:
-            self._conn.execute(
-                _INSERT,
-                (
-                    time.time(),
-                    detection.market,
-                    detection.detector,
-                    round(detection.score, 6),
-                    detection.message,
-                    json.dumps(detection.details),
-                ),
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                self._write_sync,
+                time.time(),
+                detection.market,
+                detection.detector,
+                round(detection.score, 6),
+                detection.message,
+                json.dumps(detection.details),
             )
-            self._conn.commit()
         except Exception:
             logger.exception("SQLite write failed for detection %r", detection.detector)
 

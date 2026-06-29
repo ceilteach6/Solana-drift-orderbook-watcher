@@ -46,7 +46,7 @@ async def main() -> None:
             for det in detectors:
                 detections.extend(det.analyze(snap, history[market]))
             history[market].append(snap)
-            dispatcher.emit(detections)
+            await dispatcher.emit(detections)
         await asyncio.sleep(0.05)
 
     print("\nDone.")

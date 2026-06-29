@@ -69,13 +69,15 @@ class Watcher:
         duration = self.settings.run_duration_sec
 
         while True:
+            t0 = time.monotonic()
             for market in self.settings.markets:
                 await self._tick(market)
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
                 return
-            await asyncio.sleep(interval)
+            # Compensate for processing time so the actual poll rate stays stable.
+            await asyncio.sleep(max(0.0, interval - (time.monotonic() - t0)))
 
     async def _tick(self, market: str) -> None:
         # Circuit-breaker: skip this cycle if we're in backoff.
