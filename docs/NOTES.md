@@ -41,9 +41,10 @@ Any endpoint that accepts `POST` with `{"content": "..."}` works.
 - [x] Layering / spoofing-like wall detector
 - [x] Order-flicker detector
 - [x] Orderbook-imbalance detector
-- [ ] Time-of-day / session baseline (anomaly relative to normal volume)
+- [x] Session-baseline / volume-spike detector (EMA-based; catches fake depth injections and mass cancellations)
+- [x] SQLite detection log (persistent storage, queryable after the fact; set `SQLITE_PATH` in .env)
 - [ ] Cross-market correlation (bot moves SOL and BTC simultaneously)
 - [ ] ML-based anomaly scorer (isolation forest on snapshot features)
 - [ ] Wallet-level reputation / blocklist (track addresses behind flagged orders)
 - [ ] Prometheus metrics endpoint (for Grafana dashboards)
-- [ ] SQLite / Postgres time-series storage + replay mode
+- [ ] Postgres time-series storage + replay mode

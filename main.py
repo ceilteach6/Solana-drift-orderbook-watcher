@@ -14,11 +14,12 @@ Run:
 
 import asyncio
 
-from config.settings import settings
+from config.settings import load_and_validate
 from src.watcher import Watcher
 
 
 async def main():
+    settings = load_and_validate()
     watcher = Watcher(settings)
     await watcher.start()
 

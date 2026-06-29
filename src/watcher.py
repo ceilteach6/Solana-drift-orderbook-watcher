@@ -109,7 +109,7 @@ class Watcher:
         history.append(snapshot)
 
         if detections:
-            self.alert.emit(detections)
+            await self.alert.emit(detections)
 
     def _banner(self) -> None:
         sink_names = ", ".join(s.name for s in self.alert.sinks)

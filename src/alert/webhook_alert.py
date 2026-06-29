@@ -16,6 +16,7 @@ uses the stdlib ``urllib`` — no extra dependency.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.request
@@ -37,11 +38,15 @@ class WebhookAlert(Alert):
         has_url = bool(getattr(settings, "alert_webhook_url", ""))
         return has_telegram or has_url
 
-    def deliver(self, detection) -> None:
+    async def deliver(self, detection) -> None:
         payload, url = self._build_request(detection)
         if not url:
             return
         data = json.dumps(payload).encode("utf-8")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._send, data, url)
+
+    def _send(self, data: bytes, url: str) -> None:
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}
         )
@@ -49,7 +54,9 @@ class WebhookAlert(Alert):
             with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
                 resp.read()
         except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+            logger.warning(
+                "Webhook delivery failed (%s): %s", self._target(), exc, exc_info=True
+            )
 
     def _text(self, d) -> str:
         return f"🔭 [{d.market}] {d.detector} (score {d.score:.2f}) — {d.message}"

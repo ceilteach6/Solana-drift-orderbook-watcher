@@ -62,6 +62,12 @@ class Settings:
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
 
+    # --- Session-baseline detector ---
+    baseline_warmup_cycles: int = 20
+    baseline_spike_ratio: float = 3.0
+    baseline_drain_ratio: float = 0.2
+    baseline_ema_alpha: float = 0.1
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -69,6 +75,9 @@ class Settings:
     alert_webhook_url: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    # --- Storage ---
+    sqlite_path: str = ""  # leave empty to disable SQLite logging
 
     # --- Run control ---
     run_duration_sec: float = 0.0
@@ -94,6 +103,16 @@ class Settings:
             )
         if not self.markets:
             errors.append("MARKETS must contain at least one market name")
+        if self.repeated_min_count < 2:
+            errors.append(f"REPEATED_MIN_COUNT must be >= 2, got {self.repeated_min_count}")
+        if self.layering_min_levels < 2:
+            errors.append(f"LAYERING_MIN_LEVELS must be >= 2, got {self.layering_min_levels}")
+        if self.flicker_min_events < 2:
+            errors.append(f"FLICKER_MIN_EVENTS must be >= 2, got {self.flicker_min_events}")
+        if not 0.0 < self.baseline_spike_ratio:
+            errors.append(f"BASELINE_SPIKE_RATIO must be > 0, got {self.baseline_spike_ratio}")
+        if not 0.0 < self.baseline_ema_alpha <= 1.0:
+            errors.append(f"BASELINE_EMA_ALPHA must be in (0, 1], got {self.baseline_ema_alpha}")
         if errors:
             raise ValueError("Configuration errors:\n  " + "\n  ".join(errors))
 
@@ -117,11 +136,16 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
+        baseline_warmup_cycles=_get_int("BASELINE_WARMUP_CYCLES", 20),
+        baseline_spike_ratio=_get_float("BASELINE_SPIKE_RATIO", 3.0),
+        baseline_drain_ratio=_get_float("BASELINE_DRAIN_RATIO", 0.2),
+        baseline_ema_alpha=_get_float("BASELINE_EMA_ALPHA", 0.1),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
+        sqlite_path=_get_str("SQLITE_PATH", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 
@@ -137,5 +161,6 @@ def load_and_validate() -> Settings:
     return s
 
 
-# Ready-to-use singleton (validates at import time).
+# Lazy singleton — call load_and_validate() in entry points (main.py, tests).
+# This bare version is kept for backwards-compat module inspection only.
 settings = load_settings()

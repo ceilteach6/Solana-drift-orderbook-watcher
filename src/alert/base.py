@@ -23,7 +23,7 @@ class Alert:
     def __init__(self, settings) -> None:
         self.settings = settings
 
-    def deliver(self, detection) -> None:
+    async def deliver(self, detection) -> None:
         """Deliver one (already score-filtered) detection."""
         raise NotImplementedError
 
@@ -35,15 +35,15 @@ class AlertDispatcher:
         self.settings = settings
         self.sinks: list[Alert] = list(sinks)
 
-    def emit(self, detections) -> int:
-        """Deliver qualifying detections. Returns how many were emitted."""
+    async def emit(self, detections) -> int:
+        """Deliver qualifying detections to all sinks. Returns how many were emitted."""
         emitted = 0
         for d in detections:
             if d.score < self.settings.alert_min_score:
                 continue
             for sink in self.sinks:
                 try:
-                    sink.deliver(d)
+                    await sink.deliver(d)
                 except Exception:
                     logger.exception("Alert sink %r failed", sink.name)
             emitted += 1

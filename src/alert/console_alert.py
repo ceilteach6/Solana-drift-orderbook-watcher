@@ -23,7 +23,7 @@ _ICONS = {
 class ConsoleAlert(Alert):
     name = "console"
 
-    def deliver(self, detection) -> None:
+    async def deliver(self, detection) -> None:
         if self.settings.alert_format == "json":
             self._emit_json(detection)
         else:
