@@ -17,10 +17,13 @@ returning an object with ``bids`` / ``asks``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+_CONNECT_TIMEOUT_SEC = 30  # maximum seconds to wait for each subscription step
 
 
 class DriftStack:
@@ -67,19 +70,19 @@ class DriftStack:
             settings.drift_env,
             account_subscription=AccountSubscriptionConfig("websocket"),
         )
-        await drift_client.subscribe()
+        await asyncio.wait_for(drift_client.subscribe(), timeout=_CONNECT_TIMEOUT_SEC)
 
         user_map = UserMap(UserMapConfig(drift_client, WebsocketConfig()))
-        await user_map.subscribe()
+        await asyncio.wait_for(user_map.subscribe(), timeout=_CONNECT_TIMEOUT_SEC)
 
         slot_subscriber = SlotSubscriber(drift_client)
-        await slot_subscriber.subscribe()
+        await asyncio.wait_for(slot_subscriber.subscribe(), timeout=_CONNECT_TIMEOUT_SEC)
 
         dlob_config = DLOBClientConfig(
             drift_client, user_map, slot_subscriber, settings.update_frequency_ms
         )
         dlob_subscriber = DLOBSubscriber(config=dlob_config)
-        await dlob_subscriber.subscribe()
+        await asyncio.wait_for(dlob_subscriber.subscribe(), timeout=_CONNECT_TIMEOUT_SEC)
 
         return cls(drift_client, dlob_subscriber, connection, user_map, slot_subscriber)
 

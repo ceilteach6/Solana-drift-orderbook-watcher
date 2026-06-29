@@ -120,11 +120,21 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
+            if price is None or size is None:
+                continue  # skip malformed levels rather than silently using 0.0
             out.append(Level(_to_float(price), _to_float(size)))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or [])
-    asks = levels(getattr(l2, "asks", None) or [])
+    # Enforce canonical ordering so detectors that slice [:n] get the best levels.
+    bids = sorted(
+        levels(getattr(l2, "bids", None) or []),
+        key=lambda lvl: lvl.price,
+        reverse=True,  # descending: highest bid first
+    )
+    asks = sorted(
+        levels(getattr(l2, "asks", None) or []),
+        key=lambda lvl: lvl.price,  # ascending: lowest ask first
+    )
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

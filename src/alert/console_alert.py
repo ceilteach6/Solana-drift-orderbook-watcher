@@ -17,6 +17,7 @@ _ICONS = {
     "layering": "🧱",
     "flicker": "✨",
     "imbalance": "⚖️ ",
+    "volume_spike": "📊",
 }
 
 

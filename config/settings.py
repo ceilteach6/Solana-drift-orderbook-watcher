@@ -152,7 +152,11 @@ def load_settings() -> Settings:
 
 def load_and_validate() -> Settings:
     """Load settings and immediately validate them, exiting on error."""
-    s = load_settings()
+    try:
+        s = load_settings()
+    except (ValueError, TypeError) as exc:
+        print(f"❌ Configuration error (bad environment variable): {exc}", file=sys.stderr)
+        sys.exit(1)
     try:
         s.validate()
     except ValueError as exc:
