@@ -42,10 +42,11 @@ def _get_str(name: str, default: str) -> str:
 class Settings:
     """Immutable runtime configuration."""
 
-    # --- Connection ---
-    rpc_url: str
-    drift_env: str
-    keypair_path: str
+    # --- Connection / network ---
+    network: str = "drift"  # "drift" or "hyperliquid"
+    rpc_url: str = ""
+    drift_env: str = "mainnet"
+    keypair_path: str = ""
 
     # --- Markets / feed ---
     markets: list[str] = field(default_factory=list)
@@ -90,6 +91,7 @@ def load_settings() -> Settings:
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
     return Settings(
+        network=_get_str("NETWORK", "drift").lower(),
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
