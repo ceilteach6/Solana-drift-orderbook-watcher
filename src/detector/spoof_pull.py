@@ -28,7 +28,7 @@ class SpoofPullDetector(BaseDetector):
         prev = history[-1]
         curr = snapshot
 
-        if prev.mid is None or curr.mid is None:
+        if prev.mid is None or curr.mid is None or prev.mid == 0.0:
             return []
 
         n = self.settings.spoof_pull_levels

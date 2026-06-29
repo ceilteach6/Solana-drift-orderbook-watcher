@@ -183,3 +183,16 @@ class TestSpoofPullDetector:
         prev = snap()
         curr = snap()
         assert det.analyze(curr, [prev]) == []
+
+    def test_quiet_when_prev_mid_is_zero(self):
+        """ZeroDivisionError guard: prev.mid == 0.0 must not crash."""
+        from src.collector.orderbook_feed import OrderbookSnapshot
+        det = SpoofPullDetector(make_settings())
+        # Craft a snapshot whose mid property would return 0.0 by directly setting
+        # bids/asks that average to 0 — we test the guard via a snapshot where
+        # bids and asks are empty so mid returns None, but also cover the explicit
+        # 0.0 branch by using a mock-style namespace.
+        from types import SimpleNamespace
+        zero_mid = SimpleNamespace(mid=0.0, bids=[], asks=[], market="X")
+        curr = snap(bids=[(100.0, 5.0)], asks=[(101.0, 5.0)])
+        assert det.analyze(curr, [zero_mid]) == []

@@ -18,6 +18,7 @@ from collections import deque
 from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
+from src.detector.base import Detection
 from src.risk_aggregator import RiskAggregator
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class Watcher:
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.risk = RiskAggregator(settings)
+        self._elevated: set[str] = set()  # markets currently above composite threshold
         self.feed = None
 
         # Keep enough history per market to cover the flicker window.
@@ -88,9 +90,30 @@ class Watcher:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
 
-        self.risk.update(market, detections)
+        ema_score = self.risk.update(market, detections)
         if detections:
             self.alert.emit(detections)
+
+        # Emit a composite alert on the rising edge of the elevated threshold only,
+        # to avoid repeat-firing every tick while risk stays high.
+        is_elevated_now = self.risk.is_elevated(market)
+        was_elevated = market in self._elevated
+        if is_elevated_now and not was_elevated:
+            self.alert.emit([Detection(
+                detector="risk_aggregator",
+                market=market,
+                score=ema_score,
+                message=(
+                    f"Composite risk elevated: EMA score {ema_score:.3f} ≥ "
+                    f"threshold {self.settings.risk_composite_threshold} — "
+                    f"sustained suspicious activity on {market}"
+                ),
+                details={"ema_score": round(ema_score, 4), "all_scores": self.risk.all_scores()},
+            )])
+        if is_elevated_now:
+            self._elevated.add(market)
+        else:
+            self._elevated.discard(market)
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
