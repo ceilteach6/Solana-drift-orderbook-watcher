@@ -19,6 +19,9 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay stored snapshots through the detectors with the current settings:
+  python main.py --replay
 """
 
 import asyncio
@@ -52,6 +55,11 @@ if __name__ == "__main__":
         from src.dashboard import run_dashboard
 
         sys.exit(run_dashboard(settings))
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import run_replay
+
+        sys.exit(run_replay(settings))
 
     try:
         asyncio.run(main())

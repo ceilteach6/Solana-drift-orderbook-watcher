@@ -193,6 +193,24 @@ class SQLiteStore(Store):
             out[table] = cur.fetchone()["n"]
         return out
 
+    def snapshot_markets(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM snapshots ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
+
+    def read_snapshots_raw(self, market: str, limit: int | None = None):
+        """Stored L2 books for a market, oldest first (for replay)."""
+        sql = (
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "ORDER BY ts ASC, id ASC"
+        )
+        params: tuple = (market,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (market, limit)
+        return list(self._conn.execute(sql, params).fetchall())
+
     def recent_detections(self, limit: int = 10) -> list[sqlite3.Row]:
         cur = self._conn.execute(
             "SELECT ts, market, detector, score, message FROM detections "

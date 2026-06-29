@@ -43,7 +43,8 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/replay/` — replay / backtesting tárolt snapshotokon (`--replay`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -79,13 +80,18 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Replay ✅
+- **Replay / backtesting** (`src/replay/`) — tárolt L2 snapshotok újrajátszása a
+  detektorokon a *jelenlegi* küszöbökkel → offline hangolás élő piac nélkül.
+  `python main.py --replay`. (PERSIST_SNAPSHOTS=true adat kell hozzá.) *(kész)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
-2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+1. **Multi-venue collectorok (egész Solana orderbook)** — Phoenix/OpenBook/Zeta/
+   Mango collector, ugyanabba a pipeline-ba (lásd a 4. szakaszt).
+2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---
