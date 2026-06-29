@@ -80,6 +80,11 @@ class Settings:
     # --- Storage ---
     db_path: str = ""  # empty = disabled; e.g. "drift_watcher.db"
 
+    # --- Wallet reputation ---
+    blocklist_wallets: list = field(default_factory=list)  # hard-blocked addresses
+    reputation_decay: float = 0.90         # EMA decay (higher = slower rise)
+    reputation_block_threshold: float = 0.75  # auto-block above this score
+
     # --- Run control ---
     run_duration_sec: float = 0.0
 
@@ -114,6 +119,13 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         db_path=_get_str("DB_PATH", ""),
+        blocklist_wallets=[
+            w.strip()
+            for w in _get_str("BLOCKLIST_WALLETS", "").split(",")
+            if w.strip()
+        ],
+        reputation_decay=_get_float("REPUTATION_DECAY", 0.90),
+        reputation_block_threshold=_get_float("REPUTATION_BLOCK_THRESHOLD", 0.75),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 

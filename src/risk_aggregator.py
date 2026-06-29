@@ -48,13 +48,6 @@ class RiskAggregator:
         smoothed = alpha * tick_score + (1.0 - alpha) * prev
         self._ema[market] = smoothed
 
-        if self.is_elevated(market):
-            logger.info(
-                "RISK [%s] EMA=%.3f (tick=%.3f) — composite threshold reached",
-                market,
-                smoothed,
-                tick_score,
-            )
         return smoothed
 
     def score(self, market: str) -> float:
