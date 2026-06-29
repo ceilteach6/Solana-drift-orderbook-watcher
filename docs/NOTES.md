@@ -41,7 +41,8 @@ kész; csak az értékeket kell beírnod.
 | `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
-| `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész (új) |
+| `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
+| `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -66,14 +67,21 @@ nem avatkozik be. Prioritás szerinti felépítés:
   hiszterézissel + cooldownnal csak tartósan magas szintnél riaszt. Kapcsolható
   (`RISK_AGGREGATION`); kikapcsolva a régi per-detekció mód fut. *(kész)*
 
+### Tárolás ✅
+- **Time-series tárolás (SQLite)** (`src/storage/sqlite_store.py`) — detekciók +
+  risk-score (és opcionálisan a teljes L2 könyv) perzisztálása. `STORAGE_ENABLED`,
+  `DB_PATH`, `PERSIST_SNAPSHOTS`. Visszanézés: `python main.py --dbstats`. Ez az
+  alap a replay-hez, elemzéshez és a TradingView-stílusú dashboardhoz. *(kész)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
-   perzisztálása, replay és utólagos elemzés. (DB_URL → user része.)
-2. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
-   gyanús viselkedésű makerek jelölése. (Adatforrás-link → user része.)
+1. **REST/WebSocket végpont + Lightweight Charts dashboard** — a tárolt ár +
+   risk + detekció-markerek vizualizálása (TradingView ingyenes chart-könyvtára).
+2. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
-   eltérés alapján.
+4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+   (Adatforrás-link → user része.)
+5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+   eltérés alapján (a perzisztált idősoron tanítva).
 
 ### Riasztási csatornák
 - ✅ console, ✅ JSON, ✅ webhook-plumbing (Telegram/Discord) — **token/URL = user része**

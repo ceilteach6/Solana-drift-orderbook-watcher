@@ -21,6 +21,7 @@ from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
 from src.risk import RiskAggregator
 from src.selftest import run_selftest
+from src.storage import SQLiteStore
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class Watcher:
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
+        self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
 
         # Keep enough history per market to cover the flicker window.
@@ -52,11 +54,15 @@ class Watcher:
             datefmt="%H:%M:%S",
         )
         self._banner()
+        if self.store is not None:
+            self.store.connect()
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
         finally:
             await self.feed.close()
+            if self.store is not None:
+                self.store.close()
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000
@@ -126,6 +132,22 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
+        self._persist(market, snapshot, detections)
+
+    def _persist(self, market: str, snapshot, detections) -> None:
+        if self.store is None:
+            return
+        try:
+            if self.settings.persist_snapshots:
+                self.store.record_snapshot(snapshot)
+            self.store.record_detections(snapshot.timestamp, detections)
+            if self.aggregator is not None:
+                self.store.record_risk(
+                    market, snapshot.timestamp, self.aggregator.score(market)
+                )
+        except Exception:
+            logger.exception("Storage write failed for %s", market)
+
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
@@ -139,4 +161,8 @@ class Watcher:
         if self.settings.healthcheck_enabled:
             print(f"   Health    : self-test every "
                   f"{self.settings.healthcheck_interval_sec:.0f}s")
+        if self.store is not None:
+            snaps = " + snapshots" if self.settings.persist_snapshots else ""
+            print(f"   Storage   : {self.settings.db_path} "
+                  f"(detections + risk{snaps})")
         print("   Press Ctrl+C to stop.\n")

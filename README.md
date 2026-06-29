@@ -104,6 +104,14 @@ python main.py --selftest
 Set `HEALTHCHECK_ENABLED=true` to re-run this check periodically while watching,
 alerting if any detector stops firing.
 
+### Persist the time-series (optional)
+Set `STORAGE_ENABLED=true` to record detections and risk scores to SQLite
+(`DB_PATH`, default `data/watcher.db`). Inspect what was collected:
+```bash
+python main.py --dbstats
+```
+This is the foundation for replay, analytics, and a charting dashboard.
+
 ---
 
 ## 🔧 How the Drift integration works

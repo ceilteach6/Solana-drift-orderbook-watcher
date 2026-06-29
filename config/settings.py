@@ -76,6 +76,11 @@ class Settings:
     healthcheck_enabled: bool = False
     healthcheck_interval_sec: float = 300.0
 
+    # --- Storage (time-series persistence) ---
+    storage_enabled: bool = False
+    db_path: str = "data/watcher.db"
+    persist_snapshots: bool = False  # high volume; off by default
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -120,6 +125,11 @@ def load_settings() -> Settings:
         healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
+        storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        db_path=_get_str("DB_PATH", "data/watcher.db"),
+        persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
+        in ("1", "true", "yes", "on"),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
