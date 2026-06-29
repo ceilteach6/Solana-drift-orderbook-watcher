@@ -17,6 +17,7 @@ imports/constructors here — the rest of the watcher only depends on
 
 from __future__ import annotations
 
+import inspect
 import logging
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ class DriftStack:
                 continue
             try:
                 result = unsub()
-                if hasattr(result, "__await__"):
+                if inspect.isawaitable(result):
                     await result
             except Exception:  # pragma: no cover - best-effort teardown
                 logger.debug("Error during teardown of %r", obj, exc_info=True)

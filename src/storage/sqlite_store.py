@@ -150,7 +150,11 @@ class SQLiteStore(Store):
         )
         return [r["market"] for r in cur.fetchall()]
 
+    _ALLOWED_SERIES_COLUMNS = frozenset({"mid", "score"})
+
     def _series(self, column: str, market: str, limit: int):
+        if column not in self._ALLOWED_SERIES_COLUMNS:
+            raise ValueError(f"Invalid column: {column!r}")
         cur = self._conn.execute(
             f"SELECT CAST(ts AS INTEGER) AS sec, AVG({column}) AS v FROM risk "
             f"WHERE market = ? AND {column} IS NOT NULL "

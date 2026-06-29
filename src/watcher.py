@@ -34,6 +34,7 @@ class Watcher:
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
+        self._last_healthcheck: float = 0.0
 
         # Keep enough history per market to cover the flicker window.
         interval = max(settings.update_frequency_ms / 1000, 0.001)

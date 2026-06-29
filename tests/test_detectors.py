@@ -102,7 +102,7 @@ def test_flicker_fires_on_toggling_level():
     det = FlickerDetector(make_settings(flicker_min_events=3, flicker_window_sec=10))
     base = 1000.0
     history = []
-    # Level @ 100 toggles present/absent across snapshots.
+    # Bid level @ 100 toggles present/absent across snapshots.
     for i in range(6):
         present = i % 2 == 0
         bids = [(100.0, 5.0)] if present else [(99.0, 5.0)]
@@ -111,6 +111,8 @@ def test_flicker_fires_on_toggling_level():
     detections = det.analyze(current, history)
     assert len(detections) == 1
     assert detections[0].details["transitions"] >= 3
+    assert detections[0].details["side"] in ("bid", "ask")
+    assert "price" in detections[0].details
 
 
 def test_flicker_quiet_on_stable_book():

@@ -21,6 +21,7 @@ _ICONS = {
     "imbalance": "⚖️",
     "spoof_pull": "🎣",
     "risk": "🚨",
+    "risk_aggregator": "🚨",
     "healthcheck": "🔬",
 }
 

@@ -88,7 +88,8 @@ class DriftOrderbookFeed(OrderbookFeed):
         logger.info("Connected to Drift (%s)", self.settings.drift_env)
 
     async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
-        assert self._stack is not None, "connect() must be called first"
+        if self._stack is None:
+            raise RuntimeError("connect() must be called before get_snapshot()")
         raw = self._stack.get_l2(market, depth=self.settings.orderbook_depth)
         if raw is None:
             return None
@@ -121,8 +122,8 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             out.append(Level(_to_float(price), _to_float(size)))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or getattr(l2, "bids", []))
-    asks = levels(getattr(l2, "asks", None) or getattr(l2, "asks", []))
+    bids = levels(getattr(l2, "bids", None) or [])
+    asks = levels(getattr(l2, "asks", None) or [])
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 
