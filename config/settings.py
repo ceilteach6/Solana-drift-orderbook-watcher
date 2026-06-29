@@ -61,6 +61,13 @@ class Settings:
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
 
+    # --- Risk aggregation ---
+    risk_aggregation: bool = True
+    risk_smoothing: float = 0.4  # EMA alpha (0..1); higher = more reactive
+    risk_alert_threshold: float = 0.6
+    risk_clear_threshold: float = 0.4
+    risk_alert_cooldown_sec: float = 30.0
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -92,6 +99,12 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
+        risk_aggregation=_get_str("RISK_AGGREGATION", "true").lower()
+        not in ("0", "false", "no", "off"),
+        risk_smoothing=_get_float("RISK_SMOOTHING", 0.4),
+        risk_alert_threshold=_get_float("RISK_ALERT_THRESHOLD", 0.6),
+        risk_clear_threshold=_get_float("RISK_CLEAR_THRESHOLD", 0.4),
+        risk_alert_cooldown_sec=_get_float("RISK_ALERT_COOLDOWN_SEC", 30.0),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),

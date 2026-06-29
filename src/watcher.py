@@ -18,6 +18,7 @@ from collections import deque
 from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
+from src.risk import RiskAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class Watcher:
         self.settings = settings
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
+        self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
         self.feed = None
 
         # Keep enough history per market to cover the flicker window.
@@ -86,13 +88,21 @@ class Watcher:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
 
-        if detections:
+        if self.aggregator is not None:
+            # Consolidate into a single smoothed risk signal per market.
+            risk = self.aggregator.update(market, snapshot.timestamp, detections)
+            if risk is not None:
+                self.alert.emit([risk])
+        elif detections:
+            # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
+        mode = "risk-aggregated" if self.aggregator else "raw per-detection"
+        print(f"   Mode      : {mode}")
         print(f"   Interval  : {self.settings.update_frequency_ms} ms")
         print(f"   Alerts    : {self.settings.alert_format} "
               f"(min score {self.settings.alert_min_score}) → "

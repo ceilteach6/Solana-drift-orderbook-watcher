@@ -38,8 +38,9 @@ kész; csak az értékeket kell beírnod.
 | `config/settings.py` — env-alapú konfiguráció | ✅ kész |
 | `src/collector/` — L2 modell + driftpy DLOB feed + szintetikus fallback | ✅ kész |
 | `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
-| `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész (új) |
-| `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész (új) |
+| `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
+| `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
+| `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -55,20 +56,23 @@ nem avatkozik be. Prioritás szerinti felépítés:
 - `repeated_size` — ismétlődő rendelési méretek (bot-aláírás)
 - `layering` — egyoldali fal (layering/spoofing)
 - `flicker` — gyors megjelenés/eltűnés (quote stuffing)
-- `imbalance` — erős egyoldali nyomás a top szinteken *(új)*
+- `imbalance` — erős egyoldali nyomás a top szinteken
+
+### Aggregáció ✅
+- **Risk-aggregátor** (`src/risk/aggregator.py`) — a detektorok score-jait
+  piaconként egy simított kockázati szintté (noisy-OR + EMA) vonja össze, és
+  hiszterézissel + cooldownnal csak tartósan magas szintnél riaszt. Kapcsolható
+  (`RISK_AGGREGATION`); kikapcsolva a régi per-detekció mód fut. *(kész)*
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Risk-aggregátor** — a detektorok score-jait piaconként egy összesített
-   kockázati pontszámmá vonja össze (idősoros simítással), hogy a riasztás ne
-   spammeljen, hanem egy stabil "gyanússági szint" legyen.
-2. **Spoof-pull detektor** — nagy fal jelenik meg, majd közvetlenül egy
+1. **Spoof-pull detektor** — nagy fal jelenik meg, majd közvetlenül egy
    ár-elmozdulás *előtt* eltűnik (history-alapú korreláció a flicker fölött).
-3. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
+2. **Time-series tárolás (SQLite/Postgres)** — snapshotok + detekciók
    perzisztálása, replay és utólagos elemzés. (DB_URL → user része.)
-4. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
+3. **Wallet-szintű reputáció / blocklist** — opcionális modul: ismétlődő
    gyanús viselkedésű makerek jelölése. (Adatforrás-link → user része.)
-5. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-6. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján.
 
 ### Riasztási csatornák

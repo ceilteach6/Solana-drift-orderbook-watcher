@@ -19,6 +19,7 @@ _ICONS = {
     "layering": "🧱",
     "flicker": "✨",
     "imbalance": "⚖️",
+    "risk": "🚨",
 }
 
 
