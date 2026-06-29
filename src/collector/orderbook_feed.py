@@ -121,8 +121,8 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             out.append(Level(_to_float(price), _to_float(size)))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or getattr(l2, "bids", []))
-    asks = levels(getattr(l2, "asks", None) or getattr(l2, "asks", []))
+    bids = levels(getattr(l2, "bids", None) or [])
+    asks = levels(getattr(l2, "asks", None) or [])
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

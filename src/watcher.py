@@ -18,6 +18,7 @@ from collections import deque
 from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
+from src.risk_aggregator import RiskAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class Watcher:
         self.settings = settings
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
+        self.risk = RiskAggregator(settings)
         self.feed = None
 
         # Keep enough history per market to cover the flicker window.
@@ -86,6 +88,7 @@ class Watcher:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
 
+        self.risk.update(market, detections)
         if detections:
             self.alert.emit(detections)
 
@@ -94,6 +97,8 @@ class Watcher:
         print(f"   Markets   : {', '.join(self.settings.markets)}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         print(f"   Interval  : {self.settings.update_frequency_ms} ms")
+        print(f"   Risk EMA  : alpha={self.settings.risk_ema_alpha}, "
+              f"composite threshold={self.settings.risk_composite_threshold}")
         print(f"   Alerts    : {self.settings.alert_format} "
               f"(min score {self.settings.alert_min_score}) → "
               f"{', '.join(s.name for s in self.alert.sinks)}")

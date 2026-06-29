@@ -60,6 +60,14 @@ class Settings:
     flicker_min_events: int = 3
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
+    # Spoof-pull detector
+    spoof_pull_levels: int = 5
+    spoof_pull_vol_ratio: float = 0.50
+    spoof_pull_price_delta: float = 0.001
+
+    # --- Risk aggregator ---
+    risk_ema_alpha: float = 0.30
+    risk_composite_threshold: float = 0.70
 
     # --- Alerting ---
     alert_min_score: float = 0.6
@@ -92,6 +100,11 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
+        spoof_pull_levels=_get_int("SPOOF_PULL_LEVELS", 5),
+        spoof_pull_vol_ratio=_get_float("SPOOF_PULL_VOL_RATIO", 0.50),
+        spoof_pull_price_delta=_get_float("SPOOF_PULL_PRICE_DELTA", 0.001),
+        risk_ema_alpha=_get_float("RISK_EMA_ALPHA", 0.30),
+        risk_composite_threshold=_get_float("RISK_COMPOSITE_THRESHOLD", 0.70),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),

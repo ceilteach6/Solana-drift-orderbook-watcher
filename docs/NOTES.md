@@ -38,11 +38,12 @@ kész; csak az értékeket kell beírnod.
 | `config/settings.py` — env-alapú konfiguráció | ✅ kész |
 | `src/collector/` — L2 modell + driftpy DLOB feed + szintetikus fallback | ✅ kész |
 | `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
-| `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész (új) |
-| `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész (új) |
-| `src/watcher.py` — orchestrator | ✅ kész |
-| `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
+| `src/detector/spoof_pull.py` — spoof-pull detektor (wall collapse + ármozgás) | ✅ kész (új) |
+| `src/alert/` — dispatcher + console + webhook (Telegram/Discord) | ✅ kész |
+| `src/risk_aggregator.py` — EMA per-market risk score + composite threshold | ✅ kész (új) |
+| `src/watcher.py` — orchestrator (risk aggregátor integrálva) | ✅ kész |
+| `examples/quickstart.py`, `tests/` — 24/24 teszt átment | ✅ kész |
 
 ---
 
