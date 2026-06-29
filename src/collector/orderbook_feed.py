@@ -122,8 +122,10 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             out.append(Level(_to_float(price), _to_float(size)))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or [])
-    asks = levels(getattr(l2, "asks", None) or [])
+    # Sort to match the contract: bids descending, asks ascending.
+    # driftpy usually returns them sorted, but normalize defensively.
+    bids = sorted(levels(getattr(l2, "bids", None) or []), key=lambda l: l.price, reverse=True)
+    asks = sorted(levels(getattr(l2, "asks", None) or []), key=lambda l: l.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

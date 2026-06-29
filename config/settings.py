@@ -48,7 +48,7 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    markets: tuple = field(default_factory=tuple)  # tuple[str, ...] — truly immutable
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
 
@@ -93,20 +93,61 @@ class Settings:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # --- Metrics ---
+    metrics_port: int = 0  # 0 = disabled; e.g. 8000 → http://localhost:8000/metrics
+
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+
+def _validate(s: Settings) -> None:
+    """Raise :exc:`ValueError` early for obviously wrong configuration values."""
+    if s.spoof_min_price_move <= 0:
+        raise ValueError(
+            f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {s.spoof_min_price_move}). "
+            "A value of 0 causes division-by-zero in the spoof-pull detector."
+        )
+    if not (0.0 < s.risk_smoothing <= 1.0):
+        raise ValueError(
+            f"RISK_SMOOTHING must be in (0, 1] (got {s.risk_smoothing})."
+        )
+    if not (0.0 < s.risk_alert_threshold <= 1.0):
+        raise ValueError(
+            f"RISK_ALERT_THRESHOLD must be in (0, 1] (got {s.risk_alert_threshold})."
+        )
+    if not (0.0 <= s.risk_clear_threshold < s.risk_alert_threshold):
+        raise ValueError(
+            "RISK_CLEAR_THRESHOLD must be >= 0 and < RISK_ALERT_THRESHOLD "
+            f"(got clear={s.risk_clear_threshold}, alert={s.risk_alert_threshold})."
+        )
+    if s.orderbook_depth < 1:
+        raise ValueError(
+            f"ORDERBOOK_DEPTH must be >= 1 (got {s.orderbook_depth})."
+        )
+    if s.update_frequency_ms < 10:
+        raise ValueError(
+            f"UPDATE_FREQUENCY_MS must be >= 10 ms (got {s.update_frequency_ms})."
+        )
+    if not (0 <= s.metrics_port <= 65535):
+        raise ValueError(
+            f"METRICS_PORT must be 0–65535 (got {s.metrics_port})."
+        )
+    if not (0 <= s.dashboard_port <= 65535):
+        raise ValueError(
+            f"DASHBOARD_PORT must be 0–65535 (got {s.dashboard_port})."
+        )
 
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    markets_list = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    s = Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=tuple(markets_list) if markets_list else ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
@@ -141,8 +182,11 @@ def load_settings() -> Settings:
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
+        metrics_port=_get_int("METRICS_PORT", 0),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
+    _validate(s)
+    return s
 
 
 # Ready-to-use singleton.

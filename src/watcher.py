@@ -19,6 +19,7 @@ from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
+from src.metrics.prometheus import MetricsExporter
 from src.risk import RiskAggregator
 from src.selftest import run_selftest
 from src.storage import SQLiteStore
@@ -33,6 +34,7 @@ class Watcher:
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
+        self.metrics = MetricsExporter(settings)
         self.feed = None
         self._last_healthcheck: float = 0.0
 
@@ -57,11 +59,13 @@ class Watcher:
         self._banner()
         if self.store is not None:
             self.store.connect()
-        self.feed = await create_feed(self.settings)
+        self.metrics.start()
         try:
+            self.feed = await create_feed(self.settings)
             await self._run_loop()
         finally:
-            await self.feed.close()
+            if self.feed is not None:
+                await self.feed.close()
             if self.store is not None:
                 self.store.close()
 
@@ -115,6 +119,8 @@ class Watcher:
         if snapshot is None:
             return
 
+        self.metrics.record_tick(market)
+
         history = self._history[market]
         detections = []
         for detector in self.detectors:
@@ -124,14 +130,20 @@ class Watcher:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
 
+        emitted = 0
         if self.aggregator is not None:
             # Consolidate into a single smoothed risk signal per market.
             risk = self.aggregator.update(market, snapshot.timestamp, detections)
+            self.metrics.record_risk_score(market, self.aggregator.score(market))
             if risk is not None:
-                self.alert.emit([risk])
+                self.metrics.record_detections([risk])
+                emitted += self.alert.emit([risk])
         elif detections:
             # Raw mode: one alert per detection.
-            self.alert.emit(detections)
+            self.metrics.record_detections(detections)
+            emitted += self.alert.emit(detections)
+
+        self.metrics.record_alerts(market, emitted)
 
         self._persist(market, snapshot, detections)
 
@@ -167,4 +179,6 @@ class Watcher:
             snaps = " + snapshots" if self.settings.persist_snapshots else ""
             print(f"   Storage   : {self.settings.db_path} "
                   f"(detections + risk{snaps})")
+        if self.settings.metrics_port:
+            print(f"   Metrics   : http://localhost:{self.settings.metrics_port}/metrics")
         print("   Press Ctrl+C to stop.\n")

@@ -19,6 +19,7 @@ kész; csak az értékeket kell beírnod.
 | Telegram értesítés | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | @BotFather (token), @userinfobot (chat id) | ⏳ te töltöd |
 | Discord értesítés | `ALERT_WEBHOOK_URL` | Discord → Channel → Integrations → Webhooks | ⏳ te töltöd |
 | (jövő) DB connection | `DB_URL` | SQLite fájl vagy Postgres URL | 🔲 még nincs kódolva |
+| (opcionális) Prometheus metrics | `METRICS_PORT` | saját érték (pl. 8000); `pip install prometheus_client` | ⏳ opcionális |
 
 **Fontos linkek / végpontok (referencia):**
 - Drift docs / DLOB: https://drift.trade , `driftpy` SDK
@@ -35,18 +36,26 @@ kész; csak az értékeket kell beírnod.
 
 | Komponens | Állapot |
 |---|---|
-| `config/settings.py` — env-alapú konfiguráció | ✅ kész |
-| `src/collector/` — L2 modell + driftpy DLOB feed + szintetikus fallback | ✅ kész |
 | `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
 | `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
+| `src/detector/spoof_pull.py` — nagy fal visszahúzása ár-elmozdulással korrelálva | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
-| `src/watcher.py` — orchestrator | ✅ kész |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/metrics/prometheus.py` — opcionális Prometheus metrics exporter | ✅ kész (új) |
+| `src/watcher.py` — orchestrator (risk + storage + metrics integrálva) | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| **Bug-javítások** | |
+| `webhook_alert.py` — HTTP → daemon thread (nem blokkolja az event loop-ot) | ✅ javítva |
+| `flicker.py` — bid/ask szétválasztva a presence set-ben (false positive fix) | ✅ javítva |
+| `console_alert.py` — hiányzó ikonok hozzáadva (spoof_pull 🎭, risk_aggregator 🔴) | ✅ javítva |
+| `drift_client.py` — `inspect.isawaitable()` a `hasattr(__await__)` helyett | ✅ javítva |
+| `watcher.py` — `self.feed` None-guard a `finally` blokkban (AttributeError fix) | ✅ javítva |
+| `settings.py` — `markets` típus `list` → `tuple` (valóban immutable frozen dataclass) | ✅ javítva |
+| `settings.py` — `_validate()`: `spoof_min_price_move`, `risk_smoothing`, küszöbök stb. early fail | ✅ javítva |
+| `orderbook_feed.py` — bids/asks rendezés `_snapshot_from_driftpy`-ban (mid helyes lesz) | ✅ javítva |
 
 ---
 
@@ -82,7 +91,7 @@ nem avatkozik be. Prioritás szerinti felépítés:
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+3. ~~**Prometheus metrics exporter**~~ ✅ kész — `METRICS_PORT=8000`; `pip install prometheus_client`
 4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
 5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
