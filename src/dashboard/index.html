@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Drift Orderbook Watcher — Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0e1116; color: #d6deeb; font: 14px system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid #1f2733; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  select { background: #161b22; color: #d6deeb; border: 1px solid #2a3441; border-radius: 6px; padding: 6px 10px; }
+  .muted { color: #7d8da3; }
+  .panel { padding: 8px 18px; }
+  .label { margin: 6px 0 2px; font-size: 12px; color: #7d8da3; text-transform: uppercase; letter-spacing: .04em; }
+  #price { height: 360px; }
+  #risk { height: 150px; }
+  #legend { padding: 8px 18px; font-size: 12px; }
+  .chip { display: inline-block; margin-right: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔭 Drift Orderbook Watcher</h1>
+  <label class="muted">Market
+    <select id="market"></select>
+  </label>
+  <span id="status" class="muted"></span>
+</header>
+
+<div class="panel">
+  <div class="label">Mid price + detection markers</div>
+  <div id="price"></div>
+  <div class="label">Risk level (0–1)</div>
+  <div id="risk"></div>
+</div>
+<div id="legend">
+  <span class="chip">♻️ repeated_size</span>
+  <span class="chip">🧱 layering</span>
+  <span class="chip">✨ flicker</span>
+  <span class="chip">⚖️ imbalance</span>
+  <span class="chip">🎣 spoof_pull</span>
+</div>
+
+<script>
+const COLORS = {
+  repeated_size: '#9c88ff', layering: '#ff9f43', flicker: '#54a0ff',
+  imbalance: '#feca57', spoof_pull: '#ff6b6b', risk: '#ee5253',
+};
+
+const priceChart = LightweightCharts.createChart(document.getElementById('price'), chartOpts(360));
+const riskChart  = LightweightCharts.createChart(document.getElementById('risk'),  chartOpts(150));
+const priceLine = priceChart.addLineSeries({ color: '#2ecc71', lineWidth: 2 });
+const riskLine  = riskChart.addAreaSeries({ lineColor: '#ee5253', topColor: 'rgba(238,82,83,.4)', bottomColor: 'rgba(238,82,83,0)' });
+
+function chartOpts(h) {
+  return {
+    height: h, layout: { background: { color: '#0e1116' }, textColor: '#7d8da3' },
+    grid: { vertLines: { color: '#161b22' }, horzLines: { color: '#161b22' } },
+    timeScale: { timeVisible: true, secondsVisible: true, borderColor: '#2a3441' },
+    rightPriceScale: { borderColor: '#2a3441' },
+  };
+}
+
+async function getJSON(url) { const r = await fetch(url); return r.json(); }
+
+async function loadMarkets() {
+  const markets = await getJSON('/api/markets');
+  const sel = document.getElementById('market');
+  sel.innerHTML = '';
+  for (const m of markets) {
+    const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o);
+  }
+  return markets;
+}
+
+async function refresh() {
+  const market = document.getElementById('market').value;
+  if (!market) return;
+  try {
+    const [series, dets] = await Promise.all([
+      getJSON('/api/series?market=' + encodeURIComponent(market)),
+      getJSON('/api/detections?market=' + encodeURIComponent(market)),
+    ]);
+    if (series.price && series.price.length) priceLine.setData(series.price);
+    if (series.risk && series.risk.length) riskLine.setData(series.risk);
+
+    const markers = (dets || [])
+      .map(d => ({
+        time: d.time, position: 'aboveBar', color: COLORS[d.detector] || '#bbb',
+        shape: 'circle', text: d.detector,
+      }))
+      .sort((a, b) => a.time - b.time);
+    priceLine.setMarkers(markers);
+
+    document.getElementById('status').textContent =
+      `${series.price?.length || 0} price pts · ${dets?.length || 0} detections · updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById('status').textContent = 'error: ' + e;
+  }
+}
+
+(async function init() {
+  const markets = await loadMarkets();
+  document.getElementById('market').addEventListener('change', refresh);
+  if (markets.length) await refresh();
+  setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>

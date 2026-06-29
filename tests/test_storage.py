@@ -63,9 +63,31 @@ def test_record_detections_empty_is_noop(tmp_path):
 
 def test_record_risk(tmp_path):
     store = make_store(tmp_path)
-    store.record_risk("SOL-PERP", 1.0, 0.55)
-    store.record_risk("SOL-PERP", 2.0, 0.62)
+    store.record_risk("SOL-PERP", 1.0, 0.55, 150.0)
+    store.record_risk("SOL-PERP", 2.0, 0.62, 150.5)
     assert store.counts()["risk"] == 2
+    store.close()
+
+
+def test_series_and_markets_readback(tmp_path):
+    store = make_store(tmp_path)
+    store.record_risk("SOL-PERP", 1.2, 0.5, 150.0)
+    store.record_risk("SOL-PERP", 1.8, 0.7, 151.0)  # same second -> averaged
+    store.record_risk("SOL-PERP", 2.4, 0.6, 152.0)
+    store.record_detections(1.0, [det("flicker", 0.8)])
+
+    assert store.markets() == ["SOL-PERP"]
+
+    price = store.price_series("SOL-PERP")
+    risk = store.risk_series("SOL-PERP")
+    # Two distinct seconds (1 and 2), ascending and unique.
+    assert [p["time"] for p in price] == [1, 2]
+    assert price[0]["value"] == 150.5  # avg of 150.0 and 151.0
+    assert [r["time"] for r in risk] == [1, 2]
+
+    markers = store.detection_markers("SOL-PERP")
+    assert markers[0]["detector"] == "flicker"
+    assert markers[0]["time"] == 1
     store.close()
 
 

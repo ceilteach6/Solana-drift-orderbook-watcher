@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS risk (
     id        INTEGER PRIMARY KEY,
     market    TEXT NOT NULL,
     ts        REAL NOT NULL,
-    score     REAL NOT NULL
+    score     REAL NOT NULL,
+    mid       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_risk_market_ts ON risk(market, ts);
 """
@@ -67,7 +68,7 @@ class Store:
     def record_detections(self, ts: float, detections) -> None:
         raise NotImplementedError
 
-    def record_risk(self, market: str, ts: float, score: float) -> None:
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         raise NotImplementedError
 
     def close(self) -> None:
@@ -131,12 +132,58 @@ class SQLiteStore(Store):
         )
         self._conn.commit()
 
-    def record_risk(self, market: str, ts: float, score: float) -> None:
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         self._conn.execute(
-            "INSERT INTO risk(market, ts, score) VALUES (?, ?, ?)",
-            (market, ts, score),
+            "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
+            (market, ts, score, mid),
         )
         self._conn.commit()
+
+    # ------------------------------------------------------------------ #
+    # Read APIs for the dashboard (bucketed to whole seconds so the chart
+    # gets unique, ascending time values).
+    # ------------------------------------------------------------------ #
+    def markets(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM risk "
+            "UNION SELECT DISTINCT market FROM detections ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
+
+    def _series(self, column: str, market: str, limit: int):
+        cur = self._conn.execute(
+            f"SELECT CAST(ts AS INTEGER) AS sec, AVG({column}) AS v FROM risk "
+            f"WHERE market = ? AND {column} IS NOT NULL "
+            "GROUP BY sec ORDER BY sec DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = cur.fetchall()
+        rows.reverse()  # ascending for the chart
+        return [{"time": r["sec"], "value": r["v"]} for r in rows]
+
+    def price_series(self, market: str, limit: int = 2000):
+        return self._series("mid", market, limit)
+
+    def risk_series(self, market: str, limit: int = 2000):
+        return self._series("score", market, limit)
+
+    def detection_markers(self, market: str, limit: int = 200):
+        cur = self._conn.execute(
+            "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
+            "WHERE market = ? ORDER BY id DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = list(cur.fetchall())
+        rows.reverse()
+        return [
+            {
+                "time": r["sec"],
+                "detector": r["detector"],
+                "score": r["score"],
+                "message": r["message"],
+            }
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:

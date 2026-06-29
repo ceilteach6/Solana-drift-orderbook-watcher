@@ -42,7 +42,8 @@ kész; csak az értékeket kell beírnod.
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
-| `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész (új) |
+| `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -73,15 +74,38 @@ nem avatkozik be. Prioritás szerinti felépítés:
   `DB_PATH`, `PERSIST_SNAPSHOTS`. Visszanézés: `python main.py --dbstats`. Ez az
   alap a replay-hez, elemzéshez és a TradingView-stílusú dashboardhoz. *(kész)*
 
+### Vizualizáció ✅
+- **Dashboard** (`src/dashboard/`) — stdlib HTTP szerver + TradingView
+  Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
+  olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **REST/WebSocket végpont + Lightweight Charts dashboard** — a tárolt ár +
-   risk + detekció-markerek vizualizálása (TradingView ingyenes chart-könyvtára).
-2. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
+1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
+2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
 3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
 5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
+
+---
+
+## 4. 🌐 Kiterjesztés az egész Solana hálózatra (architektúra-jegyzet)
+
+A kérdés: bővíthető-e a projekt az egész Solana hálózatra? Két értelemben:
+
+**A) Több Solana-tőzsde (orderbook-szint) — KÖNNYEN.** A detektorok, a
+risk-aggregátor, a tárolás, a dashboard és az alert **mind az absztrakt
+`OrderbookSnapshot`-on dolgoznak** — nem tudnak Driftről. Csak a
+`src/collector/` Drift-specifikus. Új venue (Phoenix, OpenBook, Zeta, Mango) =
+**új collector**, ami ugyanabba a pipeline-ba táplál. Kis-közepes munka, mert az
+absztrakció már megvan. Ez a `MARKETS` és a collector-réteg bővítése.
+
+**B) Teljes lánc / minden tranzakció — ÚJ ÁG.** Ez már nem orderbook-
+mikrostruktúra, hanem általános on-chain analitika (Geyser/tranzakció-stream,
+Helius webhookok). Más adatforrás + **új detektor-család** kell (wash trading,
+sandwich/MEV, rug, token-launch). A meglévő detektorok erre nem alkalmazhatók,
+de a risk/tárolás/alert/dashboard mag újrahasználható egy testvér-projektként.
 
 ### Riasztási csatornák
 - ✅ console, ✅ JSON, ✅ webhook-plumbing (Telegram/Discord) — **token/URL = user része**

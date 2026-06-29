@@ -112,6 +112,14 @@ python main.py --dbstats
 ```
 This is the foundation for replay, analytics, and a charting dashboard.
 
+### Dashboard (TradingView Lightweight Charts)
+With storage enabled and some data collected, serve the chart UI:
+```bash
+python main.py --dashboard      # then open http://127.0.0.1:8787
+```
+Shows the mid price with detection markers and a risk-level panel, reading
+straight from the SQLite store (the watcher can keep writing concurrently).
+
 ---
 
 ## 🔧 How the Drift integration works

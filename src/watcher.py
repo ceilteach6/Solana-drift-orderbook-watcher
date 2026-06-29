@@ -143,7 +143,8 @@ class Watcher:
             self.store.record_detections(snapshot.timestamp, detections)
             if self.aggregator is not None:
                 self.store.record_risk(
-                    market, snapshot.timestamp, self.aggregator.score(market)
+                    market, snapshot.timestamp,
+                    self.aggregator.score(market), snapshot.mid,
                 )
         except Exception:
             logger.exception("Storage write failed for %s", market)

@@ -16,6 +16,9 @@ Self-test (no network; verifies every detector fires on a known pattern):
 
 Inspect the stored time-series (row counts + recent detections):
   python main.py --dbstats
+
+Serve the charting dashboard (reads the stored time-series):
+  python main.py --dashboard
 """
 
 import asyncio
@@ -44,6 +47,11 @@ if __name__ == "__main__":
         print(store.summary())
         store.close()
         sys.exit(0)
+
+    if "--dashboard" in sys.argv[1:]:
+        from src.dashboard import run_dashboard
+
+        sys.exit(run_dashboard(settings))
 
     try:
         asyncio.run(main())
