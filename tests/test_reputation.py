@@ -202,3 +202,23 @@ def test_wallet_methods_noop_on_disabled_store():
     assert s.top_suspect_wallets() == []
     assert s.wallet_count() == 0
     s.close()
+
+
+def test_hit_count_public_method():
+    rep = WalletReputation(make_settings())
+    assert rep.hit_count("unknown") == 0
+    rep.record("wallet_A", 0.5)
+    rep.record("wallet_A", 0.5)
+    assert rep.hit_count("wallet_A") == 2
+
+
+def test_auto_block_log_fires_only_on_rising_edge(caplog):
+    """record() must log 'auto-blocked' exactly once — not on every subsequent tick."""
+    import logging
+    rep = WalletReputation(make_settings(reputation_decay=0.0, reputation_block_threshold=0.75))
+    with caplog.at_level(logging.INFO, logger="src.reputation.wallet_reputation"):
+        rep.record("wallet_A", 0.80)  # crosses threshold → log expected
+        rep.record("wallet_A", 0.80)  # already blocked → no repeat log
+        rep.record("wallet_A", 0.80)
+    blocked_logs = [r for r in caplog.records if "auto-blocked" in r.message]
+    assert len(blocked_logs) == 1

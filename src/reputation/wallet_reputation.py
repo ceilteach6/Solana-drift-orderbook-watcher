@@ -98,6 +98,7 @@ class WalletReputation:
         Returns the new reputation score.
         """
         prev = self._scores.get(wallet, 0.0)
+        was_auto_blocked = prev >= self._block_threshold
         new_score = self._decay * prev + (1.0 - self._decay) * float(detection_score)
         self._scores[wallet] = new_score
         self._hits[wallet] = self._hits.get(wallet, 0) + 1
@@ -110,7 +111,8 @@ class WalletReputation:
                 wallet in self._blocklist,
             )
 
-        if self.is_blocked(wallet) and new_score >= self._block_threshold:
+        # Log only on the rising edge — not every tick after threshold is crossed.
+        if not was_auto_blocked and new_score >= self._block_threshold and wallet not in self._blocklist:
             logger.info(
                 "Wallet reputation: %s auto-blocked (score=%.3f, hits=%d)",
                 wallet,
@@ -127,6 +129,10 @@ class WalletReputation:
     def get_score(self, wallet: str) -> float:
         """Current EMA reputation score (0.0 = clean, 1.0 = very suspicious)."""
         return self._scores.get(wallet, 0.0)
+
+    def hit_count(self, wallet: str) -> int:
+        """Number of detections recorded for *wallet*."""
+        return self._hits.get(wallet, 0)
 
     def is_blocked(self, wallet: str) -> bool:
         """True when wallet is manually blocklisted OR score ≥ block_threshold."""

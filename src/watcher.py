@@ -108,7 +108,7 @@ class Watcher:
                     if self.reputation.is_blocked(maker):
                         logger.warning(
                             "Blocked maker %s (reputation=%.3f, hits=%d)",
-                            maker, rep, self.reputation._hits.get(maker, 0)
+                            maker, rep, self.reputation.hit_count(maker)
                         )
 
         # Emit a composite alert on the rising edge of the elevated threshold only,

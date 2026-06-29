@@ -142,7 +142,7 @@ class SqliteStore:
                     d.detector,
                     float(d.score),
                     d.message,
-                    json.dumps(d.details),
+                    _safe_json(d.details),
                 )
                 for d in detections
             ],

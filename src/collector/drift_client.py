@@ -59,7 +59,7 @@ class DriftStack:
                     import json
 
                     kp = Keypair.from_bytes(bytes(json.load(fh)))
-            except (OSError, ValueError, Exception) as exc:
+            except Exception as exc:
                 raise RuntimeError(
                     f"Failed to load keypair from {settings.keypair_path!r}: {exc}"
                 ) from exc
