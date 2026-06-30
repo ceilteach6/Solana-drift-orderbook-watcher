@@ -26,9 +26,11 @@ logger = logging.getLogger(__name__)
 class DriftStack:
     """Owns the DriftClient + DLOB subscriber lifecycle."""
 
-    def __init__(self, drift_client, dlob_subscriber, connection) -> None:
+    def __init__(self, drift_client, dlob_subscriber, user_map, slot_subscriber, connection) -> None:
         self._drift_client = drift_client
         self._dlob = dlob_subscriber
+        self._user_map = user_map
+        self._slot_subscriber = slot_subscriber
         self._connection = connection
 
     @classmethod
@@ -76,20 +78,32 @@ class DriftStack:
         slot_subscriber = SlotSubscriber(drift_client)
         await slot_subscriber.subscribe()
 
+        # DLOBClientConfig.update_frequency is consumed by driftpy as
+        # asyncio.sleep() *seconds* between DLOB rebuilds — settings store the
+        # poll cadence in milliseconds, so it must be converted here. Passing
+        # the raw millisecond value (e.g. 1000) would make the DLOB refresh
+        # only once every ~16 minutes while the watcher keeps polling it every
+        # second, silently serving a stale orderbook.
+        update_frequency_sec = max(settings.update_frequency_ms / 1000, 0.1)
         dlob_config = DLOBClientConfig(
-            drift_client, user_map, slot_subscriber, settings.update_frequency_ms
+            drift_client, user_map, slot_subscriber, update_frequency_sec
         )
         dlob_subscriber = DLOBSubscriber(config=dlob_config)
         await dlob_subscriber.subscribe()
 
-        return cls(drift_client, dlob_subscriber, connection)
+        return cls(drift_client, dlob_subscriber, user_map, slot_subscriber, connection)
 
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
         return self._dlob.get_l2_orderbook_sync(market, depth=depth)
 
     async def close(self) -> None:
-        for obj in (self._dlob, self._drift_client):
+        # Tear down in dependency order: the DLOB subscriber's background
+        # refresh task first, then the UserMap/SlotSubscriber it reads from,
+        # then the DriftClient. Skipping user_map/slot_subscriber here would
+        # leave their websocket subscription tasks running forever after
+        # close() returns, leaking connections on every reconnect.
+        for obj in (self._dlob, self._user_map, self._slot_subscriber, self._drift_client):
             unsub = getattr(obj, "unsubscribe", None)
             if unsub is None:
                 continue
