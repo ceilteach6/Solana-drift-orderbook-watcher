@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 class WebhookAlert(Alert):
     name = "webhook"
 
+    def __init__(self, settings) -> None:
+        super().__init__(settings)
+        # Bound the number of concurrent delivery threads. Without this, a
+        # burst of detections (the exact condition this tool watches for)
+        # can spawn one OS thread per detection with no backpressure.
+        max_concurrency = max(1, getattr(settings, "alert_webhook_max_concurrency", 8))
+        self._inflight = threading.BoundedSemaphore(max_concurrency)
+
     @staticmethod
     def is_configured(settings) -> bool:
         has_telegram = bool(
@@ -38,13 +46,31 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop.
+
+        Concurrent deliveries are capped (``ALERT_WEBHOOK_MAX_CONCURRENCY``);
+        once the cap is hit, new deliveries are dropped (and logged) rather
+        than queued, since a webhook alert delivered minutes late during a
+        thread backlog is not useful.
+        """
         payload, url = self._build_request(detection)
         if not url:
             return
+        if not self._inflight.acquire(blocking=False):
+            logger.warning(
+                "Webhook delivery dropped (%d already in flight) for %s",
+                self.settings.alert_webhook_max_concurrency, self._target(),
+            )
+            return
         threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
+            target=self._send_guarded, args=(payload, url), daemon=True
         ).start()
+
+    def _send_guarded(self, payload: dict, url: str) -> None:
+        try:
+            self._send(payload, url)
+        finally:
+            self._inflight.release()
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

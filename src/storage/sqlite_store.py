@@ -71,6 +71,13 @@ class Store:
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         raise NotImplementedError
 
+    def record_tick(self, *, market, snapshot, detections,
+                     persist_snapshot: bool, risk_score: float | None) -> None:
+        raise NotImplementedError
+
+    def prune(self, retention_sec: float, now: float) -> int:
+        raise NotImplementedError
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -97,7 +104,7 @@ class SQLiteStore(Store):
         self._conn.commit()
 
     # ------------------------------------------------------------------ #
-    def record_snapshot(self, snapshot) -> None:
+    def _insert_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
         spread = (best_ask - best_bid) if (best_bid and best_ask) else None
@@ -115,10 +122,8 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
 
-    def record_detections(self, ts: float, detections) -> None:
-        """Record detections, stamped with the snapshot timestamp."""
+    def _insert_detections(self, ts: float, detections) -> None:
         rows = [
             (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
             for d in detections
@@ -130,14 +135,57 @@ class SQLiteStore(Store):
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
 
-    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+    def _insert_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         self._conn.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
+
+    def record_snapshot(self, snapshot) -> None:
+        self._insert_snapshot(snapshot)
         self._conn.commit()
+
+    def record_detections(self, ts: float, detections) -> None:
+        """Record detections, stamped with the snapshot timestamp."""
+        self._insert_detections(ts, detections)
+        self._conn.commit()
+
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+        self._insert_risk(market, ts, score, mid)
+        self._conn.commit()
+
+    def record_tick(self, *, market, snapshot, detections,
+                     persist_snapshot: bool, risk_score: float | None) -> None:
+        """Persist everything for one watcher tick as a single transaction.
+
+        Doing the snapshot/detections/risk inserts as one commit (instead of
+        one commit each) halves-to-thirds the fsync count under sustained
+        load and keeps the three rows for a tick atomically consistent.
+        """
+        if persist_snapshot:
+            self._insert_snapshot(snapshot)
+        self._insert_detections(snapshot.timestamp, detections)
+        if risk_score is not None:
+            self._insert_risk(market, snapshot.timestamp, risk_score, snapshot.mid)
+        self._conn.commit()
+
+    def prune(self, retention_sec: float, now: float) -> int:
+        """Delete rows older than ``retention_sec`` from all tables.
+
+        Keeps a long-running watcher's DB file from growing without bound.
+        Freed pages are reused by SQLite for subsequent inserts, so this
+        alone is enough to cap growth without a (blocking) VACUUM.
+        """
+        if retention_sec <= 0:
+            return 0
+        cutoff = now - retention_sec
+        deleted = 0
+        for table in ("snapshots", "detections", "risk"):
+            cur = self._conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            deleted += cur.rowcount if cur.rowcount > 0 else 0
+        self._conn.commit()
+        return deleted
 
     # ------------------------------------------------------------------ #
     # Read APIs for the dashboard (bucketed to whole seconds so the chart

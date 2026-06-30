@@ -80,6 +80,10 @@ class Settings:
     storage_enabled: bool = False
     db_path: str = "data/watcher.db"
     persist_snapshots: bool = False  # high volume; off by default
+    # Rows older than this are pruned periodically so a long-running watcher
+    # doesn't grow the DB file without bound. 0 disables pruning.
+    storage_retention_sec: float = 7 * 24 * 3600.0  # 7 days
+    storage_prune_interval_sec: float = 3600.0  # how often to sweep
 
     # --- Dashboard ---
     dashboard_host: str = "127.0.0.1"
@@ -92,6 +96,10 @@ class Settings:
     alert_webhook_url: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Caps concurrent in-flight webhook deliveries (OS threads). Extra
+    # deliveries during a burst are dropped (logged) rather than queued
+    # unboundedly, since a stale alert minutes late isn't useful.
+    alert_webhook_max_concurrency: int = 8
 
     # --- Run control ---
     run_duration_sec: float = 0.0
@@ -134,6 +142,8 @@ def load_settings() -> Settings:
         db_path=_get_str("DB_PATH", "data/watcher.db"),
         persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
         in ("1", "true", "yes", "on"),
+        storage_retention_sec=_get_float("STORAGE_RETENTION_SEC", 7 * 24 * 3600.0),
+        storage_prune_interval_sec=_get_float("STORAGE_PRUNE_INTERVAL_SEC", 3600.0),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
@@ -141,6 +151,7 @@ def load_settings() -> Settings:
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
+        alert_webhook_max_concurrency=_get_int("ALERT_WEBHOOK_MAX_CONCURRENCY", 8),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 

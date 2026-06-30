@@ -35,10 +35,14 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._last_prune: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover the longest detector
+        # lookback window (flicker and spoof-pull both read time-based
+        # windows out of this buffer).
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        window_sec = max(settings.flicker_window_sec, settings.spoof_window_sec)
+        history_len = max(8, int(window_sec / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }
@@ -70,12 +74,14 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._last_prune = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
             self._maybe_healthcheck()
+            self._maybe_prune()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
@@ -90,7 +96,15 @@ class Watcher:
             return
         self._last_healthcheck = now
 
-        results = run_selftest(self.settings)
+        # The self-test is a diagnostic; it must never be able to take the
+        # live watcher down. Any detector regression surfaced here should
+        # degrade to a logged warning, not an unhandled exception.
+        try:
+            results = run_selftest(self.settings)
+        except Exception:
+            logger.exception("Health-check self-test raised; skipping this cycle")
+            return
+
         failed = [r.name for r in results if not r.passed]
         if failed:
             logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
@@ -105,6 +119,23 @@ class Watcher:
             ])
         else:
             logger.debug("Health-check OK (%d checks passed)", len(results))
+
+    def _maybe_prune(self) -> None:
+        if self.store is None or self.settings.storage_retention_sec <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_prune < self.settings.storage_prune_interval_sec:
+            return
+        self._last_prune = now
+        try:
+            deleted = self.store.prune(self.settings.storage_retention_sec, time.time())
+            if deleted:
+                logger.info(
+                    "Pruned %d storage row(s) older than %.0fs",
+                    deleted, self.settings.storage_retention_sec,
+                )
+        except Exception:
+            logger.exception("Storage prune failed")
 
     async def _tick(self, market: str) -> None:
         try:
@@ -138,15 +169,15 @@ class Watcher:
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
             return
+        risk_score = self.aggregator.score(market) if self.aggregator is not None else None
         try:
-            if self.settings.persist_snapshots:
-                self.store.record_snapshot(snapshot)
-            self.store.record_detections(snapshot.timestamp, detections)
-            if self.aggregator is not None:
-                self.store.record_risk(
-                    market, snapshot.timestamp,
-                    self.aggregator.score(market), snapshot.mid,
-                )
+            self.store.record_tick(
+                market=market,
+                snapshot=snapshot,
+                detections=detections,
+                persist_snapshot=self.settings.persist_snapshots,
+                risk_score=risk_score,
+            )
         except Exception:
             logger.exception("Storage write failed for %s", market)
 

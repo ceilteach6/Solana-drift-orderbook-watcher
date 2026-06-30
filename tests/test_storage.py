@@ -100,6 +100,57 @@ def test_summary_runs(tmp_path):
     store.close()
 
 
+def test_record_tick_writes_all_three_tables_in_one_transaction(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick(
+        market="SOL-PERP",
+        snapshot=snap(ts=5.0),
+        detections=[det("imbalance", 0.9)],
+        persist_snapshot=True,
+        risk_score=0.42,
+    )
+    counts = store.counts()
+    assert counts == {"snapshots": 1, "detections": 1, "risk": 1}
+    store.close()
+
+
+def test_record_tick_skips_snapshot_and_risk_when_not_requested(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick(
+        market="SOL-PERP",
+        snapshot=snap(ts=5.0),
+        detections=[],
+        persist_snapshot=False,
+        risk_score=None,
+    )
+    assert store.counts() == {"snapshots": 0, "detections": 0, "risk": 0}
+    store.close()
+
+
+def test_prune_deletes_rows_older_than_retention(tmp_path):
+    store = make_store(tmp_path)
+    store.record_risk("SOL-PERP", ts=1.0, score=0.5)   # old
+    store.record_risk("SOL-PERP", ts=100.0, score=0.6)  # recent
+    store.record_detections(1.0, [det()])    # old
+    store.record_detections(100.0, [det()])  # recent
+    store.record_snapshot(snap(ts=1.0))    # old
+    store.record_snapshot(snap(ts=100.0))  # recent
+
+    deleted = store.prune(retention_sec=50, now=100.0)
+
+    assert deleted == 3  # one old row per table
+    assert store.counts() == {"snapshots": 1, "detections": 1, "risk": 1}
+    store.close()
+
+
+def test_prune_disabled_when_retention_is_zero(tmp_path):
+    store = make_store(tmp_path)
+    store.record_risk("SOL-PERP", ts=1.0, score=0.5)
+    assert store.prune(retention_sec=0, now=1000.0) == 0
+    assert store.counts()["risk"] == 1
+    store.close()
+
+
 def test_persistence_across_reopen(tmp_path):
     path = str(tmp_path / "persist.db")
     store = SQLiteStore(path)
