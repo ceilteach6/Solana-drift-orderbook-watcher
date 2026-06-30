@@ -64,7 +64,10 @@ class SpoofPullDetector(BaseDetector):
                 continue  # wall is still (mostly) there — not pulled
 
             pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
-            move_factor = min(1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move))
+            # Clamp the denominator: a zero threshold means "any move
+            # saturates the factor", not "divide by zero".
+            min_move = max(self.settings.spoof_min_price_move, 1e-9)
+            move_factor = min(1.0, abs(price_move) / (2 * min_move))
             score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
 
             detections.append(

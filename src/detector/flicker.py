@@ -54,12 +54,17 @@ class FlickerDetector(BaseDetector):
                 best_transitions = transitions
                 best_key = key
 
+        if best_key is None or best_transitions <= 0:
+            return []  # nothing ever toggled — no level to report
+
         min_events = self.settings.flicker_min_events
         if best_transitions < min_events:
             return []
 
-        side, price = best_key  # type: ignore[misc]
-        score = min(1.0, best_transitions / (min_events * 2))
+        side, price = best_key
+        # Clamp the denominator: a non-positive threshold means "flag any
+        # toggling", not "divide by zero".
+        score = min(1.0, best_transitions / (max(min_events, 1) * 2))
         return [
             Detection(
                 detector=self.name,

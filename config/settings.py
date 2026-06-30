@@ -96,6 +96,47 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        # These thresholds double as score denominators in the detectors; a
+        # value <= 0 doesn't mean "more sensitive", it means a crash (or, for
+        # comparisons like ``count < threshold``, a guard that can never
+        # trigger). Reject them here so a bad .env is caught at startup
+        # instead of silently breaking a detector for the whole run.
+        positive_int_fields = (
+            "repeated_min_count",
+            "layering_min_levels",
+            "flicker_min_events",
+            "imbalance_min_levels",
+        )
+        for name in positive_int_fields:
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(
+                    f"{name.upper()} must be >= 1 (got {value}); "
+                    "0 or negative disables the detector instead of making it "
+                    "more sensitive."
+                )
+        positive_float_fields = (
+            "spoof_min_price_move",
+            "spoof_wall_ratio",
+            "spoof_pull_fraction",
+            "repeated_size_tolerance",
+            "flicker_window_sec",
+            "spoof_window_sec",
+        )
+        for name in positive_float_fields:
+            value = getattr(self, name)
+            if value <= 0:
+                raise ValueError(f"{name.upper()} must be > 0 (got {value}).")
+        if not 0 < self.risk_smoothing <= 1:
+            raise ValueError(
+                f"RISK_SMOOTHING must be in (0, 1] (got {self.risk_smoothing})."
+            )
+        if self.update_frequency_ms <= 0:
+            raise ValueError(
+                f"UPDATE_FREQUENCY_MS must be > 0 (got {self.update_frequency_ms})."
+            )
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""

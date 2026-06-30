@@ -19,12 +19,16 @@ class RepeatedSizeDetector(BaseDetector):
             return []
 
         clusters = cluster_sizes(sizes, self.settings.repeated_size_tolerance)
+        if not clusters:
+            return []
         top = clusters[0]
         min_count = self.settings.repeated_min_count
         if top.count < min_count:
             return []
 
-        score = min(1.0, top.count / (min_count * 2))
+        # Clamp the denominator: a non-positive threshold means "flag any
+        # repetition", not "divide by zero".
+        score = min(1.0, top.count / (max(min_count, 1) * 2))
         return [
             Detection(
                 detector=self.name,
