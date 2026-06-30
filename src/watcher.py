@@ -65,6 +65,7 @@ class Watcher:
             await self.feed.close()
             if self.store is not None:
                 self.store.close()
+            self.alert.close()
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000

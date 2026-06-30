@@ -52,9 +52,26 @@ class _DaemonWorkerPool:
                 fn(*args)
             except Exception:
                 logger.exception("Webhook worker task failed")
+            finally:
+                self._queue.task_done()
 
     def submit(self, fn, *args) -> None:
         self._queue.put((fn, args))
+
+    def drain(self, timeout: float) -> bool:
+        """Best-effort wait (bounded by ``timeout``) for every queued/
+        in-flight task to finish. Returns True if the queue fully drained,
+        False on timeout — workers stay daemons either way, so a delivery
+        stuck past the timeout still can't block process exit; this only
+        gives a *planned* shutdown (SIGINT/SIGTERM) a chance to flush
+        whatever was already queued."""
+        if self._queue.unfinished_tasks == 0:
+            return True
+        done = threading.Event()
+        threading.Thread(
+            target=lambda: (self._queue.join(), done.set()), daemon=True
+        ).start()
+        return done.wait(timeout)
 
 
 # Shared across all WebhookAlert instances: bounds concurrent deliveries so an
@@ -65,6 +82,12 @@ _EXECUTOR = _DaemonWorkerPool(max_workers=4, thread_name_prefix="webhook-alert")
 
 class WebhookAlert(Alert):
     name = "webhook"
+
+    # Bound on how long a graceful shutdown waits for queued deliveries to
+    # flush. Deliberately short and fixed (not user-configurable): it only
+    # needs to cover the common case (a handful of queued HTTP calls well
+    # under their own 5s timeout), not turn shutdown into an open-ended wait.
+    _SHUTDOWN_DRAIN_SEC = 3.0
 
     @staticmethod
     def is_configured(settings) -> bool:
@@ -82,6 +105,18 @@ class WebhookAlert(Alert):
         if not url:
             return
         _EXECUTOR.submit(self._send, payload, url)
+
+    def close(self) -> None:
+        """Give the shared queue a bounded window to flush any deliveries
+        still queued/in-flight when the watcher shuts down gracefully,
+        instead of silently dropping them the instant the daemon workers
+        get torn down with the interpreter."""
+        if not _EXECUTOR.drain(self._SHUTDOWN_DRAIN_SEC):
+            logger.warning(
+                "Webhook queue did not fully drain within %.1fs at shutdown; "
+                "some queued alerts may not have been delivered.",
+                self._SHUTDOWN_DRAIN_SEC,
+            )
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

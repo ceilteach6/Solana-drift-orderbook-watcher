@@ -27,6 +27,13 @@ class Alert:
         """Deliver one (already score-filtered) detection."""
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Optional: release resources / give pending work a chance to
+        flush before the process exits. Default is a no-op; sinks that
+        queue work asynchronously (e.g. a background delivery queue)
+        should override this."""
+        return None
+
 
 class AlertDispatcher:
     """Filters detections by score and delivers them to all sinks."""
@@ -48,3 +55,12 @@ class AlertDispatcher:
                     logger.exception("Alert sink %s failed", sink.name)
             emitted += 1
         return emitted
+
+    def close(self) -> None:
+        """Close every sink (best-effort; one sink's failure doesn't stop
+        the others from getting a chance to flush)."""
+        for sink in self.sinks:
+            try:
+                sink.close()
+            except Exception:
+                logger.exception("Alert sink %s failed to close", sink.name)
