@@ -194,18 +194,44 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 # --------------------------------------------------------------------------- #
 # Factory
 # --------------------------------------------------------------------------- #
-async def create_feed(settings) -> OrderbookFeed:
-    """Return a connected feed, preferring the real Drift feed.
+async def _synthetic(settings) -> OrderbookFeed:
+    feed = SyntheticOrderbookFeed(settings)
+    await feed.connect()
+    return feed
 
-    Falls back to the synthetic feed (with a clear warning) when driftpy is
-    missing or the connection cannot be established.
-    """
+
+async def _drift(settings) -> OrderbookFeed:
     try:
         feed: OrderbookFeed = DriftOrderbookFeed(settings)
         await feed.connect()
         return feed
     except Exception as exc:  # ImportError, connection errors, etc.
         logger.warning("Real Drift feed unavailable (%s); falling back.", exc)
-        synthetic = SyntheticOrderbookFeed(settings)
-        await synthetic.connect()
-        return synthetic
+        return await _synthetic(settings)
+
+
+# Venue registry — add a new Solana venue (Phoenix, OpenBook, Zeta, Mango...) by
+# writing its feed and registering its builder here. The rest of the pipeline
+# (detectors, risk, storage, replay, dashboard, alerts) is venue-agnostic.
+_VENUE_BUILDERS = {
+    "drift": _drift,
+    "synthetic": _synthetic,
+}
+
+
+async def create_feed(settings) -> OrderbookFeed:
+    """Return a connected feed for the configured ``VENUE``.
+
+    ``drift`` uses the live DLOB and falls back to the synthetic feed when
+    driftpy is missing or the connection fails; ``synthetic`` forces demo mode.
+    Unknown venues fall back to synthetic with a warning.
+    """
+    venue = getattr(settings, "venue", "drift").lower()
+    builder = _VENUE_BUILDERS.get(venue)
+    if builder is None:
+        logger.warning(
+            "Unknown VENUE '%s' (known: %s); using synthetic feed.",
+            venue, ", ".join(sorted(_VENUE_BUILDERS)),
+        )
+        return await _synthetic(settings)
+    return await builder(settings)

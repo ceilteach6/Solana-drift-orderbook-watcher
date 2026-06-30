@@ -184,14 +184,22 @@ Then register it in `watcher.py`. That's it.
 
 ---
 
-## 🗺️ Roadmap (extension ideas)
+## 🗺️ Roadmap
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
-- [ ] ML-based anomaly detection alongside the heuristics
+Done:
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord alerts (webhook sink)
+- [x] Risk aggregator (smoothed, consolidated alerts)
+- [x] Algorithmic self-test + periodic health-check
+- [x] Time-series storage (SQLite) and replay/backtesting
+- [x] Charting dashboard (TradingView Lightweight Charts)
+
+Open:
+- [ ] **Multi-venue collectors — whole-Solana orderbook coverage**
+      (Phoenix, OpenBook, Zeta, Mango feeding the same pipeline; `VENUE=`)
+- [ ] Prometheus metrics exporter
 - [ ] Wallet-level reputation / blocklist (optional module)
-- [ ] Prometheus metrics (modeled on the Drift-style exporter)
+- [ ] ML-based anomaly detection alongside the heuristics
 
 ---
 

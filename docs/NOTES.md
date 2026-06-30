@@ -85,9 +85,16 @@ nem avatkozik be. Prioritás szerinti felépítés:
   detektorokon a *jelenlegi* küszöbökkel → offline hangolás élő piac nélkül.
   `python main.py --replay`. (PERSIST_SNAPSHOTS=true adat kell hozzá.) *(kész)*
 
+### Multi-venue keret ✅ (alap) / 🚩 nyitott flag a konkrét tőzsdékre
+- A collector mostantól **venue-választós**: `VENUE=drift|synthetic`, regisztrációs
+  táblával (`_VENUE_BUILDERS`) az `orderbook_feed.py`-ban. A keret kész — egy új
+  Solana-tőzsde = egy új feed + egy sor a regiszterben. *(keret kész)*
+- 🚩 **NYITOTT:** a konkrét második tőzsde-collector (Phoenix/OpenBook/Zeta/Mango)
+  megírása — a valódi integráció a venue SDK-ját + a felhasználó RPC-jét igényli
+  a teszteléshez.
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Multi-venue collectorok (egész Solana orderbook)** — Phoenix/OpenBook/Zeta/
-   Mango collector, ugyanabba a pipeline-ba (lásd a 4. szakaszt).
+1. **Konkrét multi-venue collector** (pl. OpenBook) — a fenti keretre építve.
 2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)

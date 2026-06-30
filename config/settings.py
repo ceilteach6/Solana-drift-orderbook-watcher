@@ -46,6 +46,7 @@ class Settings:
     rpc_url: str
     drift_env: str
     keypair_path: str
+    venue: str = "drift"
 
     # --- Markets / feed ---
     markets: list[str] = field(default_factory=list)
@@ -106,6 +107,7 @@ def load_settings() -> Settings:
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
+        venue=_get_str("VENUE", "drift").lower(),
         markets=markets or ["SOL-PERP"],
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
