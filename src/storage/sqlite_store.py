@@ -89,7 +89,13 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: writes are dispatched via asyncio.to_thread
+        # (see Watcher._persist) so they don't block the event loop, which
+        # means this connection is used from whichever thread-pool worker
+        # picks up the call — never the thread that created it. Safe here
+        # because the watcher always awaits one write at a time, so access
+        # stays strictly serial.
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")

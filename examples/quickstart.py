@@ -29,7 +29,12 @@ async def main() -> None:
 
     detectors = [cls(settings) for cls in DEFAULT_DETECTORS]
     alert = AlertDispatcher(settings, [ConsoleAlert(settings)])
-    history: list = []
+    # One history list per market — detectors (spoof_pull, flicker) compare
+    # the current snapshot against recent prior ones by time window only, not
+    # by market, so a single shared list would mix e.g. BTC-PERP's current
+    # mid-price against a SOL-PERP prior snapshot once MARKETS has more than
+    # one entry.
+    history: dict[str, list] = {market: [] for market in settings.markets}
 
     print("Running 20 synthetic ticks...\n")
     for _ in range(20):
@@ -37,11 +42,12 @@ async def main() -> None:
             snap = await feed.get_snapshot(market)
             if snap is None:
                 continue
+            market_history = history[market]
             detections = []
             for det in detectors:
-                detections.extend(det.analyze(snap, history))
-            history.append(snap)
-            history[:] = history[-16:]  # bound history
+                detections.extend(det.analyze(snap, market_history))
+            market_history.append(snap)
+            del market_history[:-16]  # bound history
             alert.emit(detections)
         await asyncio.sleep(0.05)
 
