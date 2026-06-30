@@ -57,11 +57,12 @@ class Watcher:
         self._banner()
         if self.store is not None:
             self.store.connect()
-        self.feed = await create_feed(self.settings)
         try:
+            self.feed = await create_feed(self.settings)
             await self._run_loop()
         finally:
-            await self.feed.close()
+            if self.feed is not None:
+                await self.feed.close()
             if self.store is not None:
                 self.store.close()
 

@@ -48,7 +48,7 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    markets: tuple[str, ...] = field(default_factory=tuple)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
 
@@ -97,16 +97,46 @@ class Settings:
     run_duration_sec: float = 0.0
 
 
+def _validate(s: Settings) -> None:
+    """Raise :exc:`ValueError` early for configuration that would otherwise
+    crash or misbehave deep inside the detector/risk stack at runtime."""
+    if s.spoof_min_price_move <= 0:
+        raise ValueError(
+            f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {s.spoof_min_price_move}); "
+            "a value of 0 causes a division-by-zero in the spoof-pull detector."
+        )
+    if not (0.0 < s.risk_smoothing <= 1.0):
+        raise ValueError(f"RISK_SMOOTHING must be in (0, 1] (got {s.risk_smoothing}).")
+    if not (0.0 < s.risk_alert_threshold <= 1.0):
+        raise ValueError(
+            f"RISK_ALERT_THRESHOLD must be in (0, 1] (got {s.risk_alert_threshold})."
+        )
+    if not (0.0 <= s.risk_clear_threshold < s.risk_alert_threshold):
+        raise ValueError(
+            "RISK_CLEAR_THRESHOLD must be >= 0 and < RISK_ALERT_THRESHOLD "
+            f"(got clear={s.risk_clear_threshold}, alert={s.risk_alert_threshold}); "
+            "otherwise the risk-aggregator hysteresis never clears an elevated alert."
+        )
+    if s.orderbook_depth < 1:
+        raise ValueError(f"ORDERBOOK_DEPTH must be >= 1 (got {s.orderbook_depth}).")
+    if s.update_frequency_ms < 10:
+        raise ValueError(f"UPDATE_FREQUENCY_MS must be >= 10 (got {s.update_frequency_ms}).")
+    if not s.markets:
+        raise ValueError("MARKETS must list at least one market.")
+    if not (0 <= s.dashboard_port <= 65535):
+        raise ValueError(f"DASHBOARD_PORT must be 0-65535 (got {s.dashboard_port}).")
+
+
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    markets_list = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    s = Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=tuple(markets_list) if markets_list else ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
@@ -143,6 +173,8 @@ def load_settings() -> Settings:
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
+    _validate(s)
+    return s
 
 
 # Ready-to-use singleton.

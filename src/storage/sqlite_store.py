@@ -79,6 +79,17 @@ def _levels_to_json(levels) -> str:
     return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
 
 
+def _safe_json(obj) -> str:
+    """Serialize to JSON, falling back to ``repr()`` for non-serializable
+    values so one odd detection (e.g. a future detector attaching a non-JSON
+    object in ``details``) can't break persistence for every detection in the
+    batch."""
+    try:
+        return json.dumps(obj)
+    except (TypeError, ValueError):
+        return json.dumps(repr(obj))
+
+
 class SQLiteStore(Store):
     def __init__(self, db_path: str = "data/watcher.db") -> None:
         self.db_path = db_path
@@ -97,11 +108,20 @@ class SQLiteStore(Store):
         self._conn.commit()
 
     # ------------------------------------------------------------------ #
+    def _require_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError(
+                "SQLiteStore method called before connect() (or after close()) — "
+                "call store.connect() first."
+            )
+        return self._conn
+
     def record_snapshot(self, snapshot) -> None:
+        conn = self._require_conn()
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
         spread = (best_ask - best_bid) if (best_bid and best_ask) else None
-        self._conn.execute(
+        conn.execute(
             "INSERT INTO snapshots(market, ts, mid, best_bid, best_ask, spread, bids, asks) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -115,29 +135,31 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
+        conn.commit()
 
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
         rows = [
-            (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
+            (d.market, ts, d.detector, d.score, d.message, _safe_json(d.details))
             for d in detections
         ]
         if not rows:
             return
-        self._conn.executemany(
+        conn = self._require_conn()
+        conn.executemany(
             "INSERT INTO detections(market, ts, detector, score, message, details) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
+        conn.commit()
 
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
-        self._conn.execute(
+        conn = self._require_conn()
+        conn.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
-        self._conn.commit()
+        conn.commit()
 
     # ------------------------------------------------------------------ #
     # Read APIs for the dashboard (bucketed to whole seconds so the chart

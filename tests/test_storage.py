@@ -5,6 +5,8 @@ Tests the SQLite time-series store: schema creation, writes, and read-back.
 Uses a temporary on-disk DB so WAL mode behaves as in production.
 """
 
+import pytest
+
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector.base import Detection
 from src.storage import SQLiteStore
@@ -61,6 +63,20 @@ def test_record_detections_empty_is_noop(tmp_path):
     store.close()
 
 
+def test_record_detections_survives_non_json_serializable_details(tmp_path):
+    """A future detector attaching a non-JSON value (e.g. a set) in `details`
+    must not lose the whole batch — it should fall back to repr() for that
+    one field instead of raising out of executemany()."""
+    store = make_store(tmp_path)
+    bad = Detection(
+        detector="custom", market="SOL-PERP", score=0.9,
+        message="x", details={"wallets": {"a", "b"}},
+    )
+    store.record_detections(1.0, [det("imbalance", 0.8), bad])
+    assert store.counts()["detections"] == 2
+    store.close()
+
+
 def test_record_risk(tmp_path):
     store = make_store(tmp_path)
     store.record_risk("SOL-PERP", 1.0, 0.55, 150.0)
@@ -98,6 +114,20 @@ def test_summary_runs(tmp_path):
     assert "Storage summary" in text
     assert "detections" in text
     store.close()
+
+
+def test_record_methods_raise_clear_error_before_connect(tmp_path):
+    """Calling a record_* method before connect() (or after close()) must
+    raise a clear, actionable error instead of an opaque AttributeError on
+    None — a caller that gets the lifecycle wrong should know immediately
+    why, not chase a NoneType traceback into sqlite3 internals."""
+    store = SQLiteStore(str(tmp_path / "test.db"))
+    with pytest.raises(RuntimeError, match="connect"):
+        store.record_snapshot(snap())
+    with pytest.raises(RuntimeError, match="connect"):
+        store.record_detections(1.0, [det()])
+    with pytest.raises(RuntimeError, match="connect"):
+        store.record_risk("SOL-PERP", 1.0, 0.5)
 
 
 def test_persistence_across_reopen(tmp_path):
