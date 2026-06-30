@@ -2,6 +2,7 @@
 
 from src.collector.orderbook_feed import (
     Level,
+    Order,
     OrderbookFeed,
     OrderbookSnapshot,
     SyntheticOrderbookFeed,
@@ -10,6 +11,7 @@ from src.collector.orderbook_feed import (
 
 __all__ = [
     "Level",
+    "Order",
     "OrderbookSnapshot",
     "OrderbookFeed",
     "SyntheticOrderbookFeed",

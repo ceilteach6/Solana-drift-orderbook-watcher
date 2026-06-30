@@ -39,6 +39,21 @@ class Level:
 
 
 @dataclass
+class Order:
+    """A single resting order attributed to a wallet (maker).
+
+    Available from the Drift OrderSubscriber/UserMap; the L2 book is aggregated
+    from these. Carried on the snapshot so the wallet monitor can attribute
+    activity to individual makers. Empty when the venue doesn't expose it.
+    """
+
+    wallet: str
+    side: str  # "bid" or "ask"
+    price: float
+    size: float
+
+
+@dataclass
 class OrderbookSnapshot:
     """An aggregated L2 orderbook snapshot for one market at one instant."""
 
@@ -46,6 +61,7 @@ class OrderbookSnapshot:
     timestamp: float  # epoch seconds
     bids: list[Level] = field(default_factory=list)  # descending price
     asks: list[Level] = field(default_factory=list)  # ascending price
+    orders: list = field(default_factory=list)  # per-wallet Orders (optional)
 
     @property
     def mid(self) -> float | None:
@@ -144,13 +160,30 @@ class SyntheticOrderbookFeed(OrderbookFeed):
         self.settings = settings
         self._rng = rng or random.Random()
         self._mids: dict[str, float] = {}
+        self._wallets: list[str] = []
+        self._profiles: dict[str, dict] = {}
 
     async def connect(self) -> None:
         for market in self.settings.markets:
             self._mids[market] = self._SEED_MIDS.get(market, 100.0)
+        self._build_wallet_pool()
         logger.warning(
             "Using SYNTHETIC orderbook feed (demo mode) — no live Drift data."
         )
+
+    def _build_wallet_pool(self) -> None:
+        # A small pool of fake makers; a couple behave like bots (high churn,
+        # repeated order sizes) so the wallet monitor has something to flag.
+        for idx in range(10):
+            wallet = f"W{idx:02d}{self._rng.randrange(16**6):06x}"
+            bot = idx < 2  # first two are botty
+            self._profiles[wallet] = {
+                "bot": bot,
+                "activity": 0.9 if bot else self._rng.uniform(0.3, 0.7),
+                "orders": self._rng.randint(4, 8) if bot else self._rng.randint(1, 3),
+                "size": round(self._rng.uniform(50, 150), 2),  # fixed for bots
+            }
+            self._wallets.append(wallet)
 
     async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
         mid = self._mids.get(market)
@@ -186,9 +219,32 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 
         bids = build_side("bids", -1)
         asks = build_side("asks", +1)
+        orders = self._gen_orders(market, mid, tick, depth)
         return OrderbookSnapshot(
-            market=market, timestamp=time.time(), bids=bids, asks=asks
+            market=market, timestamp=time.time(), bids=bids, asks=asks, orders=orders
         )
+
+    def _gen_orders(self, market, mid, tick, depth) -> list:
+        """Synthetic per-wallet orders. Bot wallets churn (re-price every tick)
+        and reuse a fixed size; normal wallets keep stable orders."""
+        orders: list = []
+        for wallet in self._wallets:
+            p = self._profiles[wallet]
+            if self._rng.random() > p["activity"]:
+                continue
+            for k in range(p["orders"]):
+                side = self._rng.choice(("bid", "ask"))
+                if p["bot"]:
+                    # Re-roll the price each tick -> looks like place/cancel churn.
+                    offset = self._rng.randint(1, depth)
+                    size = p["size"]  # repeated size -> bot signature
+                else:
+                    offset = k + 1  # stable across ticks -> low churn
+                    size = round(self._rng.uniform(1, 20), 2)
+                sign = 1 if side == "ask" else -1
+                price = round(mid + sign * offset * tick, 6)
+                orders.append(Order(wallet, side, price, size))
+        return orders
 
 
 # --------------------------------------------------------------------------- #

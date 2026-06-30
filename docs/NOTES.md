@@ -44,7 +44,8 @@ kész; csak az értékeket kell beírnod.
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
-| `src/replay/` — replay / backtesting tárolt snapshotokon (`--replay`) | ✅ kész (új) |
+| `src/replay/` — replay / backtesting tárolt snapshotokon (`--replay`) | ✅ kész |
+| `src/wallet/` — Drift-maker wallet-monitor + reputáció (`--wallets`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -93,8 +94,16 @@ nem avatkozik be. Prioritás szerinti felépítés:
   megírása — a valódi integráció a venue SDK-ját + a felhasználó RPC-jét igényli
   a teszteléshez.
 
+### Wallet-monitor ✅ (Drift-maker szint) / 🚩 nyitott flag a teljes láncra
+- **Drift-maker wallet-monitor** (`src/wallet/monitor.py`) — a UserMap-szintű
+  rendelésekből walletenként: churn (place/cancel), ismételt méret, multi-piac
+  jelenlét → gyanússági score + riasztás (cooldownnal). `top_wallets` rangsor,
+  `wallets` tábla, `python main.py --wallets`. `WALLET_MONITOR_ENABLED`. *(kész)*
+- 🚩 **NYITOTT:** "egész Solana top 5000 wallet" bármilyen tevékenységre —
+  indexer/analitika API kell (Helius/Dune/Flipside/Vybe → a te elérésed).
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Konkrét multi-venue collector** (pl. OpenBook) — a fenti keretre építve.
+1. **Konkrét multi-venue collector** (pl. OpenBook) — a venue-keretre építve.
 2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)

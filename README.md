@@ -128,6 +128,14 @@ tune `.env`, replay, compare — no live market needed (requires
 python main.py --replay
 ```
 
+### Wallet monitor (maker-level)
+Set `WALLET_MONITOR_ENABLED=true` to attribute orderbook activity to individual
+wallets and flag bot-like makers (churn, repeated sizes, multi-market presence).
+List the most active / suspicious wallets:
+```bash
+python main.py --wallets
+```
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -194,11 +202,14 @@ Done:
 - [x] Time-series storage (SQLite) and replay/backtesting
 - [x] Charting dashboard (TradingView Lightweight Charts)
 
+- [x] Wallet-level monitor & reputation — Drift makers (`--wallets`)
+
 Open:
 - [ ] **Multi-venue collectors — whole-Solana orderbook coverage**
       (Phoenix, OpenBook, Zeta, Mango feeding the same pipeline; `VENUE=`)
+- [ ] **Whole-Solana wallet scan — top N active wallets** (needs an indexer
+      API: Helius / Dune / Flipside / Vybe)
 - [ ] Prometheus metrics exporter
-- [ ] Wallet-level reputation / blocklist (optional module)
 - [ ] ML-based anomaly detection alongside the heuristics
 
 ---

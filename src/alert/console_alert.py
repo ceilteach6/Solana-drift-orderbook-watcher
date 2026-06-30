@@ -22,6 +22,7 @@ _ICONS = {
     "spoof_pull": "🎣",
     "risk": "🚨",
     "healthcheck": "🔬",
+    "wallet": "👛",
 }
 
 

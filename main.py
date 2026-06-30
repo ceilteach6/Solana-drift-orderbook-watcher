@@ -22,6 +22,9 @@ Serve the charting dashboard (reads the stored time-series):
 
 Replay stored snapshots through the detectors with the current settings:
   python main.py --replay
+
+Show the most active / most suspicious wallets (maker monitor):
+  python main.py --wallets
 """
 
 import asyncio
@@ -60,6 +63,24 @@ if __name__ == "__main__":
         from src.replay import run_replay
 
         sys.exit(run_replay(settings))
+
+    if "--wallets" in sys.argv[1:]:
+        from src.storage import SQLiteStore
+
+        store = SQLiteStore(settings.db_path)
+        store.connect()
+        rows = store.top_wallets(settings.wallet_top_n)
+        if not rows:
+            print("No wallet data. Run with WALLET_MONITOR_ENABLED=true "
+                  "STORAGE_ENABLED=true.")
+        else:
+            print(f"👛 Top {len(rows)} wallets by suspicion / activity")
+            for r in rows:
+                print(f"   {r['wallet']}  score {r['score']:.2f}  "
+                      f"activity {r['activity']}  "
+                      f"({r['placements']}p/{r['cancels']}c)  {r['markets']}")
+        store.close()
+        sys.exit(0)
 
     try:
         asyncio.run(main())
