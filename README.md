@@ -120,6 +120,15 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Replay / threshold tuning
+With `STORAGE_ENABLED=true PERSIST_SNAPSHOTS=true` while collecting, replay the
+recorded books back through the live detector stack — useful for tuning a
+threshold in `.env` and seeing how firing counts change without waiting on the
+real market again:
+```bash
+python main.py --replay --market SOL-PERP [--limit N]
+```
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -178,9 +187,10 @@ Then register it in `watcher.py`. That's it.
 
 ## 🗺️ Roadmap (extension ideas)
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord alerts
+- [x] Time-series storage (SQLite) and replay
+- [ ] Postgres storage backend
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
 - [ ] Prometheus metrics (modeled on the Drift-style exporter)

@@ -97,12 +97,60 @@ class Settings:
     run_duration_sec: float = 0.0
 
 
+def _validate(settings: "Settings") -> "Settings":
+    """Fail fast on config that would otherwise crash a detector mid-run.
+
+    Several detectors divide by ``threshold * 2`` or rely on a threshold being
+    reachable at all (e.g. a "best so far" search seeded at 0). A misconfigured
+    ``0`` (or negative) value for one of these turns into a ``ZeroDivisionError``
+    or an unpack-on-``None`` deep inside the live tick loop — confusing to
+    diagnose and only surfacing once a real pattern happens to trigger it.
+    Catching it once, here, at startup is the long-term fix: every entry point
+    (the watcher, ``--selftest``, ``--replay``, the dashboard, the test suite)
+    goes through :func:`load_settings`, so none of them can reach that code path.
+    """
+    errors: list[str] = []
+
+    def require_positive(name: str, value) -> None:
+        if value <= 0:
+            errors.append(f"{name} must be > 0 (got {value!r})")
+
+    require_positive("REPEATED_MIN_COUNT", settings.repeated_min_count)
+    require_positive("LAYERING_MIN_LEVELS", settings.layering_min_levels)
+    require_positive("FLICKER_MIN_EVENTS", settings.flicker_min_events)
+    require_positive("FLICKER_WINDOW_SEC", settings.flicker_window_sec)
+    require_positive("IMBALANCE_MIN_LEVELS", settings.imbalance_min_levels)
+    require_positive("SPOOF_WINDOW_SEC", settings.spoof_window_sec)
+    require_positive("ORDERBOOK_DEPTH", settings.orderbook_depth)
+    require_positive("UPDATE_FREQUENCY_MS", settings.update_frequency_ms)
+
+    if not (0.0 < settings.risk_smoothing <= 1.0):
+        errors.append(
+            f"RISK_SMOOTHING must be in (0, 1] (got {settings.risk_smoothing!r})"
+        )
+    if settings.risk_clear_threshold >= settings.risk_alert_threshold:
+        errors.append(
+            "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+            f"(got {settings.risk_clear_threshold!r} >= {settings.risk_alert_threshold!r})"
+        )
+    if settings.alert_format not in ("console", "json"):
+        errors.append(f"ALERT_FORMAT must be 'console' or 'json' (got {settings.alert_format!r})")
+    if not settings.markets:
+        errors.append("MARKETS must list at least one market")
+
+    if errors:
+        raise ValueError(
+            "Invalid configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+    return settings
+
+
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    return _validate(Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
@@ -142,7 +190,7 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
-    )
+    ))
 
 
 # Ready-to-use singleton.

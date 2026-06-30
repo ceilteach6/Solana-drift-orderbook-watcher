@@ -171,6 +171,32 @@ class SQLiteStore(Store):
     def risk_series(self, market: str, limit: int = 2000):
         return self._series("score", market, limit)
 
+    def snapshot_rows(self, market: str, limit: int = 0) -> list[sqlite3.Row]:
+        """Raw stored L2 snapshots for ``market``, oldest -> newest.
+
+        With a ``limit``, returns the most recent ``limit`` snapshots (same
+        "most recent N, ascending" convention as :meth:`price_series` /
+        :meth:`risk_series`), not the oldest ``limit``.
+
+        Requires the watcher to have run with ``PERSIST_SNAPSHOTS=true`` —
+        otherwise the ``snapshots`` table is empty (detections/risk are still
+        recorded either way). Feeds :mod:`src.replay`.
+        """
+        if limit:
+            cur = self._conn.execute(
+                "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+                "ORDER BY ts DESC LIMIT ?",
+                (market, limit),
+            )
+            rows = list(cur.fetchall())
+            rows.reverse()
+            return rows
+        cur = self._conn.execute(
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? ORDER BY ts ASC",
+            (market,),
+        )
+        return list(cur.fetchall())
+
     def detection_markers(self, market: str, limit: int = 200):
         cur = self._conn.execute(
             "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
