@@ -79,6 +79,25 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Robosztusság ✅
+- **Config-validáció indításkor** (`config/settings.py: Settings.__post_init__`) —
+  a detektor-küszöbök (pl. `FLICKER_MIN_EVENTS`, `REPEATED_MIN_COUNT`,
+  `SPOOF_MIN_PRICE_MOVE`) score-normalizáláshoz osztóként szerepelnek a
+  detektorokban; egy elgépelt `0` érték korábban `ZeroDivisionError`-ral
+  összeomlasztotta a watcher-t futás közben. Most indításkor egy érthető
+  hibaüzenettel áll le, nem órákkal később egy detektor mélyén.
+- **Dashboard `limit` paraméter korlátozása** (`src/dashboard/server.py`) — a
+  SQLite negatív `LIMIT`-et "nincs limit"-ként értelmez; egy `?limit=-1`
+  kérés korábban a teljes táblát egy JSON-válaszba dobta volna. Most 1..10000
+  közé van szorítva, kívül 400-zal utasítja el.
+- **`SQLiteStore` close() utáni használat** (`src/storage/sqlite_store.py`) —
+  korábban `AttributeError: NoneType has no attribute 'execute'`-tal
+  omlott volna össze, ha valami a `close()` után próbálja használni (pl. egy
+  jövőbeli replay-modul hosszabb élettartamú store-ot tartana nyitva). Most
+  érthető `RuntimeError`-t dob.
+- Mindhárom javításhoz regressziós teszt került (`tests/test_settings.py`,
+  `tests/test_dashboard.py`, `tests/test_storage.py`).
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.

@@ -5,6 +5,8 @@ Tests the SQLite time-series store: schema creation, writes, and read-back.
 Uses a temporary on-disk DB so WAL mode behaves as in production.
 """
 
+import pytest
+
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector.base import Detection
 from src.storage import SQLiteStore
@@ -111,3 +113,16 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_using_store_after_close_raises_clear_error(tmp_path):
+    store = make_store(tmp_path)
+    store.close()
+    with pytest.raises(RuntimeError, match="not connected"):
+        store.record_risk("SOL-PERP", 1.0, 0.5)
+
+
+def test_close_is_idempotent(tmp_path):
+    store = make_store(tmp_path)
+    store.close()
+    store.close()  # must not raise

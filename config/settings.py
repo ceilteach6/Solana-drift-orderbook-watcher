@@ -96,6 +96,41 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Fail fast on misconfiguration instead of crashing deep inside a
+        detector hours into a run. Detector thresholds like ``flicker_min_events``
+        or ``repeated_min_count`` are used as divisors (score normalization) —
+        a value of 0 raises ``ZeroDivisionError`` mid-run rather than at startup.
+        """
+        errors = []
+
+        def require_positive(name: str, value) -> None:
+            if not (value > 0):
+                errors.append(f"{name} must be > 0 (got {value!r})")
+
+        require_positive("ORDERBOOK_DEPTH", self.orderbook_depth)
+        require_positive("UPDATE_FREQUENCY_MS", self.update_frequency_ms)
+        require_positive("REPEATED_MIN_COUNT", self.repeated_min_count)
+        require_positive("LAYERING_MIN_LEVELS", self.layering_min_levels)
+        require_positive("FLICKER_WINDOW_SEC", self.flicker_window_sec)
+        require_positive("FLICKER_MIN_EVENTS", self.flicker_min_events)
+        require_positive("IMBALANCE_MIN_LEVELS", self.imbalance_min_levels)
+        require_positive("SPOOF_WINDOW_SEC", self.spoof_window_sec)
+        require_positive("SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move)
+
+        if not (0 < self.imbalance_min_ratio <= 1):
+            errors.append(
+                f"IMBALANCE_MIN_RATIO must be in (0, 1] (got {self.imbalance_min_ratio!r})"
+            )
+        if not (0 < self.risk_smoothing <= 1):
+            errors.append(
+                f"RISK_SMOOTHING must be in (0, 1] (got {self.risk_smoothing!r})"
+            )
+
+        if errors:
+            joined = "; ".join(errors)
+            raise ValueError(f"Invalid configuration — {joined}")
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""

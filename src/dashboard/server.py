@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
+# SQLite treats a negative LIMIT as "no limit" — without a bound, a crafted
+# request (e.g. ?limit=-1) would dump the entire table into one JSON response.
+_MAX_LIMIT = 10000
+
 
 def _make_handler(db_path: str):
     class Handler(BaseHTTPRequestHandler):
@@ -66,6 +70,10 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            if not (1 <= limit <= _MAX_LIMIT):
+                return self._send_json(
+                    {"error": f"limit must be between 1 and {_MAX_LIMIT}"}, 400
+                )
 
             if route in ("/", "/index.html"):
                 return self._send_html()
