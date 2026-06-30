@@ -45,9 +45,11 @@ class FlickerDetector(BaseDetector):
             presence.append(keys)
             all_keys |= keys
 
+        # Sorted iteration order makes tie-breaking deterministic: when two
+        # price levels flicker equally often, the same one is always reported.
         best_key: tuple | None = None
         best_transitions = 0
-        for key in all_keys:
+        for key in sorted(all_keys):
             seq = [key in keys for keys in presence]
             transitions = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
             if transitions > best_transitions:

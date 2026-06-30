@@ -46,7 +46,26 @@ kész; csak az értékeket kell beírnod.
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Push a távoli branchre | ✅ rendben (korábbi session-blokkolás már nem áll fenn) |
+
+### 2.1 🐛 Strukturális hibajavítások (automatikus code review, 8 szempontból)
+
+Teljes körű, line-by-line + cross-file + removed-behavior code review után az
+alábbi valós hibákat találtuk és javítottuk — mindegyiket gyökérokon, nem
+patch-szinten:
+
+| Hiba | Hol | Javítás |
+|---|---|---|
+| Erőforrás-szivárgás féligkész Drift-kapcsolatnál | `src/collector/drift_client.py` | `DriftStack.build()` most try/except blokkba ágyazva zárja a már megnyitott connection/subscription-öket, ha egy későbbi `subscribe()` hibázik, mielőtt újra dobná a kivételt |
+| `spread` hibásan `None` 0.0 áraknál | `src/storage/sqlite_store.py` | `best_bid and best_ask` (falsy-zero) → explicit `is not None` ellenőrzés |
+| Dashboard `limit` paraméter korlátlan | `src/dashboard/server.py` | Most `1..10000` közé szorítva (`?limit=-1` korábban a teljes táblát visszaadta — DoS-vektor); a límit-parszolás csak a `/api/*` route-okon fut, a `/` route-ot már nem érinti |
+| `flicker` detektor nem-determinisztikus döntetlen-feloldás | `src/detector/flicker.py` | `set` iterálás helyett `sorted()` — azonos flicker-számnál mindig ugyanazt a szintet jelenti |
+| History-puffer rövidebb, mint a `spoof_pull` ablaka | `src/watcher.py` | A history hossza most `max(flicker_window_sec, spoof_window_sec)`-ből számolódik, nem csak a flicker-ablakból |
+| Healthcheck blokkolta az event loopot | `src/watcher.py` | `run_selftest()` most `asyncio.to_thread()`-ben fut, nem állítja meg a snapshot-pollingot a self-test alatt |
+| `spoof_pull` mid==0.0 falsy-zero | `src/detector/spoof_pull.py` | `not mid_now` → explicit `is None`/`== 0` ellenőrzés |
+| Boolean env-parszolás inkonzisztens polaritással | `config/settings.py` | Közös `_get_bool()` helper, egységes truthy/falsy halmaz mind a 4 boolean configra |
+
+Teszt-állapot a javítások után: `pytest tests/ -q` → 31/31 zöld, `python main.py --selftest` → 6/6 zöld.
 
 ---
 

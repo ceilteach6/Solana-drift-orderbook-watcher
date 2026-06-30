@@ -36,9 +36,12 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover the longest window any
+        # detector looks back over (flicker and spoof-pull each have their
+        # own configurable window; history must not be shorter than either).
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        widest_window = max(settings.flicker_window_sec, settings.spoof_window_sec)
+        history_len = max(8, int(widest_window / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }
@@ -75,14 +78,14 @@ class Watcher:
             for market in self.settings.markets:
                 await self._tick(market)
 
-            self._maybe_healthcheck()
+            await self._maybe_healthcheck()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
                 return
             await asyncio.sleep(interval)
 
-    def _maybe_healthcheck(self) -> None:
+    async def _maybe_healthcheck(self) -> None:
         if not self.settings.healthcheck_enabled:
             return
         now = time.monotonic()
@@ -90,7 +93,10 @@ class Watcher:
             return
         self._last_healthcheck = now
 
-        results = run_selftest(self.settings)
+        # run_selftest is synchronous CPU work (rebuilds detectors, replays
+        # scenarios in-process) — run it off the event loop so it can't stall
+        # snapshot polling for other markets while it executes.
+        results = await asyncio.to_thread(run_selftest, self.settings)
         failed = [r.name for r in results if not r.passed]
         if failed:
             logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))

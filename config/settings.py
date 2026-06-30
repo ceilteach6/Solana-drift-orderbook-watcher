@@ -38,6 +38,23 @@ def _get_str(name: str, default: str) -> str:
     return raw.strip() if raw not in (None, "") else default
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var, falling back to ``default`` for unset/unknown values."""
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    value = raw.strip().lower()
+    if value in _TRUTHY:
+        return True
+    if value in _FALSY:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration."""
@@ -120,20 +137,16 @@ def load_settings() -> Settings:
         spoof_wall_ratio=_get_float("SPOOF_WALL_RATIO", 5.0),
         spoof_min_price_move=_get_float("SPOOF_MIN_PRICE_MOVE", 0.001),
         spoof_pull_fraction=_get_float("SPOOF_PULL_FRACTION", 0.5),
-        risk_aggregation=_get_str("RISK_AGGREGATION", "true").lower()
-        not in ("0", "false", "no", "off"),
+        risk_aggregation=_get_bool("RISK_AGGREGATION", True),
         risk_smoothing=_get_float("RISK_SMOOTHING", 0.4),
         risk_alert_threshold=_get_float("RISK_ALERT_THRESHOLD", 0.6),
         risk_clear_threshold=_get_float("RISK_CLEAR_THRESHOLD", 0.4),
         risk_alert_cooldown_sec=_get_float("RISK_ALERT_COOLDOWN_SEC", 30.0),
-        healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
-        in ("1", "true", "yes", "on"),
+        healthcheck_enabled=_get_bool("HEALTHCHECK_ENABLED", False),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
-        storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
-        in ("1", "true", "yes", "on"),
+        storage_enabled=_get_bool("STORAGE_ENABLED", False),
         db_path=_get_str("DB_PATH", "data/watcher.db"),
-        persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
-        in ("1", "true", "yes", "on"),
+        persist_snapshots=_get_bool("PERSIST_SNAPSHOTS", False),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),

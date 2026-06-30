@@ -42,7 +42,7 @@ class SpoofPullDetector(BaseDetector):
 
         mid_now = snapshot.mid
         mid_then = prior[0].mid
-        if not mid_now or not mid_then:
+        if mid_now is None or mid_then is None or mid_then == 0:
             return []
         price_move = (mid_now - mid_then) / mid_then
         if abs(price_move) < self.settings.spoof_min_price_move:

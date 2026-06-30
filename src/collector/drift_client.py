@@ -49,40 +49,65 @@ class DriftStack:
         from driftpy.slot.slot_subscriber import SlotSubscriber
 
         connection = AsyncClient(settings.rpc_url)
+        try:
+            # An ephemeral keypair is enough to *watch* — no funds, no signing.
+            if settings.keypair_path:
+                with open(settings.keypair_path) as fh:
+                    import json
 
-        # An ephemeral keypair is enough to *watch* — no funds, no signing.
-        if settings.keypair_path:
-            with open(settings.keypair_path) as fh:
-                import json
+                    kp = Keypair.from_bytes(bytes(json.load(fh)))
+            else:
+                kp = Keypair()
+            wallet = Wallet(kp)
 
-                kp = Keypair.from_bytes(bytes(json.load(fh)))
-        else:
-            kp = Keypair()
-        wallet = Wallet(kp)
+            drift_client = DriftClient(
+                connection,
+                wallet,
+                settings.drift_env,
+                account_subscription=AccountSubscriptionConfig("websocket"),
+            )
+            await drift_client.subscribe()
+            try:
+                user_map = UserMap(
+                    UserMapConfig(drift_client, WebsocketConfig())
+                )
+                await user_map.subscribe()
 
-        drift_client = DriftClient(
-            connection,
-            wallet,
-            settings.drift_env,
-            account_subscription=AccountSubscriptionConfig("websocket"),
-        )
-        await drift_client.subscribe()
+                slot_subscriber = SlotSubscriber(drift_client)
+                await slot_subscriber.subscribe()
 
-        user_map = UserMap(
-            UserMapConfig(drift_client, WebsocketConfig())
-        )
-        await user_map.subscribe()
-
-        slot_subscriber = SlotSubscriber(drift_client)
-        await slot_subscriber.subscribe()
-
-        dlob_config = DLOBClientConfig(
-            drift_client, user_map, slot_subscriber, settings.update_frequency_ms
-        )
-        dlob_subscriber = DLOBSubscriber(config=dlob_config)
-        await dlob_subscriber.subscribe()
+                dlob_config = DLOBClientConfig(
+                    drift_client, user_map, slot_subscriber, settings.update_frequency_ms
+                )
+                dlob_subscriber = DLOBSubscriber(config=dlob_config)
+                await dlob_subscriber.subscribe()
+            except Exception:
+                await cls._unsubscribe(drift_client)
+                raise
+        except Exception:
+            await cls._close_connection(connection)
+            raise
 
         return cls(drift_client, dlob_subscriber, connection)
+
+    @staticmethod
+    async def _unsubscribe(obj) -> None:
+        unsub = getattr(obj, "unsubscribe", None)
+        if unsub is None:
+            return
+        try:
+            result = unsub()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # pragma: no cover - best-effort teardown
+            logger.debug("Error during teardown of %r", obj, exc_info=True)
+
+    @staticmethod
+    async def _close_connection(connection) -> None:
+        try:
+            await connection.close()
+        except Exception:  # pragma: no cover
+            logger.debug("Error closing RPC connection", exc_info=True)
 
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
@@ -90,16 +115,5 @@ class DriftStack:
 
     async def close(self) -> None:
         for obj in (self._dlob, self._drift_client):
-            unsub = getattr(obj, "unsubscribe", None)
-            if unsub is None:
-                continue
-            try:
-                result = unsub()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:  # pragma: no cover - best-effort teardown
-                logger.debug("Error during teardown of %r", obj, exc_info=True)
-        try:
-            await self._connection.close()
-        except Exception:  # pragma: no cover
-            logger.debug("Error closing RPC connection", exc_info=True)
+            await self._unsubscribe(obj)
+        await self._close_connection(self._connection)

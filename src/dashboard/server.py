@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
+# Bounds for the `limit` query param on series/marker endpoints. SQLite treats
+# a negative LIMIT as "no limit", so this must be enforced, not just type-checked.
+_MIN_LIMIT = 1
+_MAX_LIMIT = 10_000
+_DEFAULT_LIMIT = 2000
+
 
 def _make_handler(db_path: str):
     class Handler(BaseHTTPRequestHandler):
@@ -60,15 +66,20 @@ def _make_handler(db_path: str):
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
-            params = parse_qs(parsed.query)
-            market = (params.get("market") or [""])[0]
-            try:
-                limit = int((params.get("limit") or ["2000"])[0])
-            except (ValueError, TypeError):
-                return self._send_json({"error": "limit must be an integer"}, 400)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
+
+            params = parse_qs(parsed.query)
+            market = (params.get("market") or [""])[0]
+            try:
+                limit = int((params.get("limit") or [str(_DEFAULT_LIMIT)])[0])
+            except (ValueError, TypeError):
+                return self._send_json({"error": "limit must be an integer"}, 400)
+            if not (_MIN_LIMIT <= limit <= _MAX_LIMIT):
+                return self._send_json(
+                    {"error": f"limit must be between {_MIN_LIMIT} and {_MAX_LIMIT}"}, 400
+                )
 
             # Each request opens its own short-lived read connection.
             store = SQLiteStore(db_path)
