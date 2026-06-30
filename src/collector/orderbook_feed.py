@@ -101,14 +101,27 @@ class DriftOrderbookFeed(OrderbookFeed):
 
 
 def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
+    """driftpy L2 levels carry scaled integers; normalize to floats.
+
+    Raises ``ValueError`` if ``value`` can't be coerced — callers must treat
+    that as "drop this level", not silently substitute a fake 0.0. A phantom
+    zero-price/zero-size level can sort to the front of the book and corrupt
+    ``mid``/best-bid-ask for every detector, with no error ever logged.
+    """
     # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
     # helpers usually expose ``price`` / ``size`` attributes already; we coerce
     # defensively so version differences don't crash the watcher.
     try:
         return float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        pass
+    scaled = getattr(value, "value", None)
+    if scaled is not None:
+        try:
+            return float(scaled)
+        except (TypeError, ValueError):
+            pass
+    raise ValueError(f"cannot coerce orderbook level value to float: {value!r}")
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
@@ -119,11 +132,20 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            try:
+                out.append(Level(_to_float(price), _to_float(size)))
+            except ValueError:
+                logger.warning(
+                    "Dropping unparsable orderbook level for %s: price=%r size=%r",
+                    market, price, size,
+                )
         return out
 
-    bids = levels(getattr(l2, "bids", None) or [])
-    asks = levels(getattr(l2, "asks", None) or [])
+    # Sort explicitly rather than trusting driftpy's return order: every
+    # downstream consumer (``mid``, the imbalance/spoof-pull detectors'
+    # "top N levels") relies on bids descending / asks ascending by price.
+    bids = sorted(levels(getattr(l2, "bids", None) or []), key=lambda lv: lv.price, reverse=True)
+    asks = sorted(levels(getattr(l2, "asks", None) or []), key=lambda lv: lv.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

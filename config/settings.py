@@ -76,10 +76,25 @@ class Settings:
     healthcheck_enabled: bool = False
     healthcheck_interval_sec: float = 300.0
 
+    # --- Feed resilience ---
+    # If the live feed fails this many ticks in a row, rebuild it (closes the
+    # stale connection and reconnects, or falls back to the synthetic feed).
+    feed_reconnect_after_failures: int = 5
+    # Minimum time between reconnect attempts, so a persistently-down RPC
+    # doesn't trigger a reconnect storm.
+    feed_reconnect_cooldown_sec: float = 30.0
+
     # --- Storage (time-series persistence) ---
     storage_enabled: bool = False
     db_path: str = "data/watcher.db"
     persist_snapshots: bool = False  # high volume; off by default
+    # Delete rows older than this from the DB on a fixed cadence so a
+    # multi-day run doesn't grow the DB file without bound. 0 disables pruning.
+    storage_retention_sec: float = 7 * 24 * 3600.0
+    storage_prune_interval_sec: float = 3600.0
+    # Consecutive storage write failures (e.g. disk full) before storage is
+    # disabled for the rest of the run, instead of failing (and logging) forever.
+    storage_failure_circuit_breaker: int = 10
 
     # --- Dashboard ---
     dashboard_host: str = "127.0.0.1"
@@ -92,9 +107,29 @@ class Settings:
     alert_webhook_url: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Max concurrent webhook deliveries in flight (bounds thread/OS resource use).
+    webhook_max_workers: int = 4
 
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.risk_clear_threshold >= self.risk_alert_threshold:
+            raise ValueError(
+                "risk_clear_threshold must be < risk_alert_threshold (hysteresis "
+                f"would never clear): got clear={self.risk_clear_threshold}, "
+                f"alert={self.risk_alert_threshold}"
+            )
+        if not 0.0 < self.risk_smoothing <= 1.0:
+            raise ValueError(
+                f"risk_smoothing must be in (0, 1], got {self.risk_smoothing}"
+            )
+        if self.risk_alert_cooldown_sec < 0:
+            raise ValueError("risk_alert_cooldown_sec must be >= 0")
+        if self.feed_reconnect_after_failures < 1:
+            raise ValueError("feed_reconnect_after_failures must be >= 1")
+        if self.storage_failure_circuit_breaker < 1:
+            raise ValueError("storage_failure_circuit_breaker must be >= 1")
 
 
 def load_settings() -> Settings:
@@ -129,11 +164,16 @@ def load_settings() -> Settings:
         healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
+        feed_reconnect_after_failures=_get_int("FEED_RECONNECT_AFTER_FAILURES", 5),
+        feed_reconnect_cooldown_sec=_get_float("FEED_RECONNECT_COOLDOWN_SEC", 30.0),
         storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         db_path=_get_str("DB_PATH", "data/watcher.db"),
         persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
         in ("1", "true", "yes", "on"),
+        storage_retention_sec=_get_float("STORAGE_RETENTION_SEC", 7 * 24 * 3600.0),
+        storage_prune_interval_sec=_get_float("STORAGE_PRUNE_INTERVAL_SEC", 3600.0),
+        storage_failure_circuit_breaker=_get_int("STORAGE_FAILURE_CIRCUIT_BREAKER", 10),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
@@ -141,6 +181,7 @@ def load_settings() -> Settings:
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
+        webhook_max_workers=_get_int("WEBHOOK_MAX_WORKERS", 4),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
 

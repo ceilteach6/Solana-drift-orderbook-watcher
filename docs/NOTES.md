@@ -46,7 +46,7 @@ kész; csak az értékeket kell beírnod.
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Robusztusság / hibatűrés (lásd 5. pont) | ✅ kész |
 
 ---
 
@@ -110,6 +110,30 @@ de a risk/tárolás/alert/dashboard mag újrahasználható egy testvér-projektk
 ### Riasztási csatornák
 - ✅ console, ✅ JSON, ✅ webhook-plumbing (Telegram/Discord) — **token/URL = user része**
 - 🔲 e-mail / PagerDuty — később, ha kell
+
+---
+
+## 5. 🧱 Robusztusság (hosszútávú stabilitás, nem alkalmi patch)
+
+Egy hosszan futó (napokig/hetekig élő) watcher folyamatnál a "csak egyszer
+hibázik, majd újraindul" típusú hibák halálosak: némán leáll, vagy némán rossz
+adatot kezd szolgáltatni, és senki sem veszi észre. Az alábbi pontok strukturált,
+visszatérő (nem egyszeri) védelmet építenek be a leggyakoribb hosszútávú
+hibamódok ellen:
+
+| Probléma | Megoldás | Konfiguráció |
+|---|---|---|
+| Egy `risk`-aggregátor kivétel az egész folyamatot megölte | a `_tick`-ben minden lépés (snapshot, detektorok, risk) egyformán védett try/except-tel | — |
+| Élő Drift feed websocketje elhal → némán állott/None adatot ad örökre | konszekutív-hiba számláló + automatikus `create_feed()` újrakötés (cooldown-nal, hogy ne pörögjön) | `FEED_RECONNECT_AFTER_FAILURES`, `FEED_RECONNECT_COOLDOWN_SEC` |
+| Webhook-riasztásnál minden hívás új OS-szálat indított → korlátlan szálnövekedés terhelés alatt | korlátozott méretű `ThreadPoolExecutor` az összes webhook-küldéshez | `WEBHOOK_MAX_WORKERS` |
+| `snapshots` tábla korlátlanul nő (lemezfogyás napok/hetek alatt) | időszakos pruning (régi sorok törlése retention alapján) | `STORAGE_RETENTION_SEC`, `STORAGE_PRUNE_INTERVAL_SEC` |
+| Tartós storage-hiba (pl. tele lemez) → minden tick-nél logspam, némán elveszett adat, örökre | konszekutív-hiba számláló → N hiba után storage kikapcsol + egyszeri riasztás | `STORAGE_FAILURE_CIRCUIT_BREAKER` |
+| `RISK_CLEAR_THRESHOLD >= RISK_ALERT_THRESHOLD` env-elgépelés → riasztás-villogás (flapping) | `Settings.__post_init__` validáció induláskor (`ValueError`, nem néma hibás működés) | — |
+| driftpy L2 szint nem parse-olható → némán 0.0 ár/méret lett belőle, ami az orderbook elejére sorolódhatott (rossz `mid`) | hibás szint eldobása + log, nem hamis nulla beszúrása; bid/ask explicit rendezés (csökkenő/növekvő ár) minden snapshotnál | — |
+
+Tesztek: `tests/test_watcher.py` (reconnect, aggregátor-kivétel, storage circuit
+breaker), `tests/test_config.py` (Settings validáció), `tests/test_collector.py`
+(szint-parszolás + rendezés), `tests/test_storage.py` (`prune`).
 
 ---
 

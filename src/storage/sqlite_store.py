@@ -71,6 +71,9 @@ class Store:
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         raise NotImplementedError
 
+    def prune(self, retention_sec: float, now: float) -> dict[str, int]:
+        raise NotImplementedError
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -225,3 +228,27 @@ class SQLiteStore(Store):
             self._conn.commit()
             self._conn.close()
             self._conn = None
+
+    # ------------------------------------------------------------------ #
+    # Retention. ``snapshots`` in particular is high-volume (one row per
+    # market per tick when PERSIST_SNAPSHOTS=true); without pruning, a
+    # multi-day run grows the DB file without bound until disk fills up.
+    # ------------------------------------------------------------------ #
+    _PRUNABLE_TABLES = ("snapshots", "detections", "risk")
+
+    def prune(self, retention_sec: float, now: float) -> dict[str, int]:
+        """Delete rows older than ``retention_sec`` (relative to ``now``) from
+        every time-series table. Returns rows deleted per table."""
+        if retention_sec <= 0:
+            return {}
+        cutoff = now - retention_sec
+        deleted: dict[str, int] = {}
+        for table in self._PRUNABLE_TABLES:
+            cur = self._conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            deleted[table] = cur.rowcount
+        self._conn.commit()
+        if any(deleted.values()):
+            # Reclaim space from the WAL promptly rather than waiting for the
+            # next natural checkpoint, since pruning is meant to bound disk use.
+            self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        return deleted

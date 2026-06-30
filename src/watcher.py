@@ -35,6 +35,10 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._last_prune: float = 0.0
+        self._feed_failure_streak: int = 0
+        self._last_reconnect_attempt: float = float("-inf")
+        self._storage_failure_streak: int = 0
 
         # Keep enough history per market to cover the flicker window.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
@@ -70,12 +74,14 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._last_prune = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
             self._maybe_healthcheck()
+            self._maybe_prune_storage()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
@@ -106,12 +112,68 @@ class Watcher:
         else:
             logger.debug("Health-check OK (%d checks passed)", len(results))
 
+    def _maybe_prune_storage(self) -> None:
+        if self.store is None or self.settings.storage_retention_sec <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_prune < self.settings.storage_prune_interval_sec:
+            return
+        self._last_prune = now
+        try:
+            deleted = self.store.prune(self.settings.storage_retention_sec, time.time())
+        except Exception:
+            logger.exception("Storage prune failed")
+            return
+        total = sum(deleted.values())
+        if total:
+            logger.info(
+                "Pruned %d old storage rows (retention %.0fs): %s",
+                total, self.settings.storage_retention_sec, deleted,
+            )
+
+    async def _maybe_reconnect_feed(self) -> None:
+        """Rebuild the feed after sustained failures.
+
+        A dropped websocket on the real Drift feed doesn't surface as a clean
+        exception every time — ``get_l2_orderbook_sync`` can just keep
+        returning stale/None data. Tracking a consecutive-failure streak and
+        rebuilding via ``create_feed`` (which itself falls back to synthetic
+        if the real feed can't be re-established) is the only way this
+        watcher recovers without manual intervention.
+        """
+        if self._feed_failure_streak < self.settings.feed_reconnect_after_failures:
+            return
+        now = time.monotonic()
+        if now - self._last_reconnect_attempt < self.settings.feed_reconnect_cooldown_sec:
+            return
+        self._last_reconnect_attempt = now
+        logger.warning(
+            "Feed failed %d consecutive ticks — reconnecting.",
+            self._feed_failure_streak,
+        )
+        old_feed = self.feed
+        try:
+            self.feed = await create_feed(self.settings)
+        except Exception:
+            logger.exception("Feed reconnect attempt failed; will retry.")
+            return
+        if old_feed is not None:
+            try:
+                await old_feed.close()
+            except Exception:
+                logger.debug("Error closing stale feed during reconnect", exc_info=True)
+        self._feed_failure_streak = 0
+        logger.info("Feed reconnected.")
+
     async def _tick(self, market: str) -> None:
         try:
             snapshot = await self.feed.get_snapshot(market)
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            self._feed_failure_streak += 1
+            await self._maybe_reconnect_feed()
             return
+        self._feed_failure_streak = 0
         if snapshot is None:
             return
 
@@ -126,7 +188,11 @@ class Watcher:
 
         if self.aggregator is not None:
             # Consolidate into a single smoothed risk signal per market.
-            risk = self.aggregator.update(market, snapshot.timestamp, detections)
+            try:
+                risk = self.aggregator.update(market, snapshot.timestamp, detections)
+            except Exception:
+                logger.exception("Risk aggregator raised on %s", market)
+                risk = None
             if risk is not None:
                 self.alert.emit([risk])
         elif detections:
@@ -147,8 +213,45 @@ class Watcher:
                     market, snapshot.timestamp,
                     self.aggregator.score(market), snapshot.mid,
                 )
+            self._storage_failure_streak = 0
         except Exception:
-            logger.exception("Storage write failed for %s", market)
+            self._storage_failure_streak += 1
+            logger.exception(
+                "Storage write failed for %s (%d consecutive failures)",
+                market, self._storage_failure_streak,
+            )
+            self._maybe_disable_storage()
+
+    def _maybe_disable_storage(self) -> None:
+        """Stop hammering a permanently broken store (e.g. disk full).
+
+        Without this, a persistent failure logs (and silently drops data)
+        forever, once per market per tick, with no operator-visible signal
+        beyond grepping logs.
+        """
+        if self._storage_failure_streak < self.settings.storage_failure_circuit_breaker:
+            return
+        logger.error(
+            "Disabling storage after %d consecutive write failures.",
+            self._storage_failure_streak,
+        )
+        self.alert.emit([
+            Detection(
+                detector="storage",
+                market="-",
+                score=1.0,
+                message=(
+                    f"Storage disabled after {self._storage_failure_streak} "
+                    "consecutive write failures — check disk space / DB health."
+                ),
+                details={"consecutive_failures": self._storage_failure_streak},
+            )
+        ])
+        try:
+            self.store.close()
+        except Exception:
+            logger.debug("Error closing failed store", exc_info=True)
+        self.store = None
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
