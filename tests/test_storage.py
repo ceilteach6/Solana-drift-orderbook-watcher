@@ -100,6 +100,31 @@ def test_summary_runs(tmp_path):
     store.close()
 
 
+def test_prune_deletes_rows_older_than_cutoff(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=1.0))
+    store.record_snapshot(snap(ts=100.0))
+    store.record_detections(1.0, [det()])
+    store.record_detections(100.0, [det()])
+    store.record_risk("SOL-PERP", 1.0, 0.5)
+    store.record_risk("SOL-PERP", 100.0, 0.5)
+
+    deleted = store.prune(older_than_sec=50, now=100.0)  # cutoff ts = 50.0
+
+    assert deleted == {"snapshots": 1, "detections": 1, "risk": 1}
+    assert store.counts() == {"snapshots": 1, "detections": 1, "risk": 1}
+    store.close()
+
+
+def test_prune_is_noop_when_nothing_is_old_enough(tmp_path):
+    store = make_store(tmp_path)
+    store.record_risk("SOL-PERP", 100.0, 0.5)
+    deleted = store.prune(older_than_sec=50, now=100.0)
+    assert deleted == {"snapshots": 0, "detections": 0, "risk": 0}
+    assert store.counts()["risk"] == 1
+    store.close()
+
+
 def test_persistence_across_reopen(tmp_path):
     path = str(tmp_path / "persist.db")
     store = SQLiteStore(path)

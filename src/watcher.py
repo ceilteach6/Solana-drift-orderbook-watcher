@@ -35,6 +35,7 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._last_prune: float = 0.0
 
         # Keep enough history per market to cover the flicker window.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
@@ -70,12 +71,14 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._last_prune = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
             self._maybe_healthcheck()
+            self._maybe_prune()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
@@ -105,6 +108,28 @@ class Watcher:
             ])
         else:
             logger.debug("Health-check OK (%d checks passed)", len(results))
+
+    def _maybe_prune(self) -> None:
+        """Periodically delete time-series rows older than the retention
+        window, so the insert-only ``snapshots``/``detections``/``risk``
+        tables don't grow without bound for the life of a long-running
+        process. No-op when storage is disabled or retention is <= 0."""
+        if self.store is None or self.settings.storage_retention_days <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_prune < self.settings.storage_prune_interval_sec:
+            return
+        self._last_prune = now
+        try:
+            deleted = self.store.prune(
+                self.settings.storage_retention_days * 86400, time.time()
+            )
+            total = sum(deleted.values())
+            if total:
+                logger.info("Pruned %d row(s) older than %.0fd: %s",
+                            total, self.settings.storage_retention_days, deleted)
+        except Exception:
+            logger.exception("Storage prune failed")
 
     async def _tick(self, market: str) -> None:
         try:

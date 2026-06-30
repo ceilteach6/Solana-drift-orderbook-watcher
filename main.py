@@ -22,6 +22,7 @@ Serve the charting dashboard (reads the stored time-series):
 """
 
 import asyncio
+import signal
 import sys
 
 from config.settings import settings
@@ -30,7 +31,43 @@ from src.watcher import Watcher
 
 async def main():
     watcher = Watcher(settings)
-    await watcher.start()
+    run_task = asyncio.ensure_future(watcher.start())
+
+    # SIGTERM is how Docker/systemd/Kubernetes ask a process to stop; without
+    # a handler it kills the process immediately, skipping the watcher's
+    # `finally` cleanup (closing the feed and the storage connection). Both
+    # signals now request a graceful shutdown the same way Ctrl+C does.
+    loop = asyncio.get_running_loop()
+    stop = loop.create_future()
+
+    def _request_stop(sig):
+        if not stop.done():
+            stop.set_result(sig)
+
+    registered = []
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop, sig)
+            registered.append(sig)
+        except (NotImplementedError, RuntimeError):
+            pass  # not supported on this platform; KeyboardInterrupt still works for SIGINT
+
+    try:
+        done, _ = await asyncio.wait(
+            {run_task, stop}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if stop in done and run_task not in done:
+            print(f"\n⏹️  Received {signal.Signals(stop.result()).name} — shutting down…")
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+        elif run_task in done:
+            run_task.result()  # surface any exception raised by the watcher
+    finally:
+        for sig in registered:
+            loop.remove_signal_handler(sig)
 
 
 if __name__ == "__main__":

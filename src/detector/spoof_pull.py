@@ -49,6 +49,16 @@ class SpoofPullDetector(BaseDetector):
             return []
 
         previous = prior[-1]  # the snapshot just before the current one
+        # If ticks were dropped (e.g. a transient feed error in the watcher's
+        # poll loop — see Watcher._tick), `previous` can be several intervals
+        # old rather than truly "just before". A wall that drains over many
+        # real ticks of ordinary trading would then look like a single pull.
+        # Bound the gap to a small multiple of the configured cadence so we
+        # only compare adjacent (or near-adjacent) snapshots.
+        interval = max(getattr(self.settings, "update_frequency_ms", 1000) / 1000, 1e-3)
+        if now - previous.timestamp > interval * 5:
+            return []
+
         detections: list[Detection] = []
         for side, prev_levels, cur_levels in (
             ("bid", previous.bids, snapshot.bids),

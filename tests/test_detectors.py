@@ -160,6 +160,20 @@ def test_imbalance_quiet_on_empty_book():
     assert det.analyze(snap(), []) == []
 
 
+def test_imbalance_skips_zero_size_placeholders_in_top_n_window():
+    # A zero-size placeholder level sits inside the top-5 bid slice. It must
+    # be dropped *before* slicing so the window still covers 5 real bid
+    # levels, not 4 real levels + 1 placeholder.
+    det = ImbalanceDetector(make_settings(imbalance_min_ratio=0.85, imbalance_min_levels=5))
+    s = snap(
+        bids=[(100, 100.0), (99, 0.0), (98, 100.0), (97, 100.0), (96, 100.0), (95, 100.0)],
+        asks=[(101 + i, 1.0) for i in range(5)],
+    )
+    detections = det.analyze(s, [])
+    assert len(detections) == 1
+    assert detections[0].details["bid_vol"] == 500.0  # 5 real levels, not 4
+
+
 # --------------------------------------------------------------------------- #
 # Spoof-pull
 # --------------------------------------------------------------------------- #
@@ -229,6 +243,22 @@ def test_spoof_pull_quiet_without_wall():
 def test_spoof_pull_needs_history():
     det = SpoofPullDetector(make_settings())
     assert det.analyze(_prior_with_bid_wall(), []) == []
+
+
+def test_spoof_pull_quiet_when_previous_snapshot_is_stale():
+    # Same wall-pulled-and-price-moved setup as the firing test, but the
+    # "previous" snapshot is 7s old against a 1s update cadence (5x+ a
+    # dropped-tick gap) and still inside the 10s lookback window. A wall that
+    # drained over many real ticks of trading shouldn't be flagged as a
+    # single pull just because it happens to be the nearest history entry.
+    det = SpoofPullDetector(make_settings(update_frequency_ms=1000))
+    prior = _prior_with_bid_wall(ts=0.0)
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0), (100.0, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=7.0,
+    )
+    assert det.analyze(current, [prior]) == []
 
 
 if __name__ == "__main__":

@@ -84,17 +84,42 @@ class SQLiteStore(Store):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
 
-    def connect(self) -> None:
+    def connect(self, check_same_thread: bool = True) -> None:
         if self.db_path not in (":memory:", ""):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=check_same_thread)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # Only takes effect on a brand-new (empty) database file; lets
+        # `prune()` reclaim disk via incremental_vacuum without a full,
+        # lock-heavy VACUUM. Harmless no-op on a pre-existing database.
+        self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+
+    def prune(self, older_than_sec: float, now: float) -> dict[str, int]:
+        """Delete rows older than ``older_than_sec`` (by snapshot ``ts``).
+
+        Insert-only tables otherwise grow without bound for the life of the
+        process. SQLite reuses freed pages for new inserts even without a
+        VACUUM, so this alone bounds on-disk growth; ``incremental_vacuum``
+        additionally returns freed pages to the OS on databases created with
+        ``auto_vacuum=INCREMENTAL`` (a no-op otherwise). Returns the number
+        of rows deleted per table.
+        """
+        cutoff = now - older_than_sec
+        deleted: dict[str, int] = {}
+        for table in ("snapshots", "detections", "risk"):
+            cur = self._conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+            deleted[table] = cur.rowcount
+        self._conn.commit()
+        if any(deleted.values()):
+            self._conn.execute("PRAGMA incremental_vacuum")
+            self._conn.commit()
+        return deleted
 
     # ------------------------------------------------------------------ #
     def record_snapshot(self, snapshot) -> None:
