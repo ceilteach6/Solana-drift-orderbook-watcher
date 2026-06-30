@@ -84,12 +84,12 @@ class SQLiteStore(Store):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
 
-    def connect(self) -> None:
+    def connect(self, *, check_same_thread: bool = True) -> None:
         if self.db_path not in (":memory:", ""):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=check_same_thread)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")

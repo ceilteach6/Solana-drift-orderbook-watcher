@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -32,6 +33,16 @@ _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
 
 def _make_handler(db_path: str):
+    # One shared, read-only connection for the whole server lifetime, guarded
+    # by a lock. ThreadingHTTPServer hands each request its own thread, so
+    # opening (and schema-initializing) a brand-new SQLite connection per
+    # request is wasted work that scales with request rate; sqlite3
+    # connections also aren't safe to use from multiple threads at once
+    # without explicit synchronization, hence the lock.
+    store = SQLiteStore(db_path)
+    store.connect(check_same_thread=False)
+    db_lock = threading.Lock()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet default logging
             return
@@ -70,30 +81,27 @@ def _make_handler(db_path: str):
             if route in ("/", "/index.html"):
                 return self._send_html()
 
-            # Each request opens its own short-lived read connection.
-            store = SQLiteStore(db_path)
-            try:
-                store.connect()
-                if route == "/api/markets":
-                    return self._send_json(store.markets())
-                if route == "/api/series":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json({
-                        "price": store.price_series(market, limit),
-                        "risk": store.risk_series(market, limit),
-                    })
-                if route == "/api/detections":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json(store.detection_markers(market, limit))
-                return self._send_json({"error": "not found"}, 404)
-            except Exception as exc:
-                logger.exception("dashboard request failed")
-                return self._send_json({"error": str(exc)}, 500)
-            finally:
-                store.close()
+            with db_lock:
+                try:
+                    if route == "/api/markets":
+                        return self._send_json(store.markets())
+                    if route == "/api/series":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json({
+                            "price": store.price_series(market, limit),
+                            "risk": store.risk_series(market, limit),
+                        })
+                    if route == "/api/detections":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json(store.detection_markers(market, limit))
+                    return self._send_json({"error": "not found"}, 404)
+                except Exception as exc:
+                    logger.exception("dashboard request failed")
+                    return self._send_json({"error": str(exc)}, 500)
 
+    Handler._store = store
     return Handler
 
 
@@ -117,4 +125,5 @@ def run_dashboard(settings) -> int:
         print("\n⏹️  Dashboard stopped.")
     finally:
         server.server_close()
+        handler._store.close()
     return 0

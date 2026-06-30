@@ -108,7 +108,20 @@ def _to_float(value) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        pass
+    raw = getattr(value, "value", None)
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    # Neither a plain number nor a `.value`-bearing wrapper: this is an
+    # unrecognized driftpy shape, not a legitimately-zero level. Coercing it
+    # silently to 0.0 would feed a fake price/size into mid-price and detector
+    # math, masking a real parsing problem. Log it so version drift is visible
+    # instead of showing up as unexplained zero-priced levels.
+    logger.warning("Could not coerce orderbook level value to float: %r", value)
+    return 0.0
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
