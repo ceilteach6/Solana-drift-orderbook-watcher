@@ -190,6 +190,24 @@ class SQLiteStore(Store):
         ]
 
     # ------------------------------------------------------------------ #
+    # Read API for replay/backtesting (src/replay.py): reconstruct the raw L2
+    # books persisted when PERSIST_SNAPSHOTS=true, oldest -> newest.
+    # ------------------------------------------------------------------ #
+    def markets_with_snapshots(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM snapshots ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
+
+    def snapshots_for_replay(self, market: str, limit: int = 100_000) -> list[sqlite3.Row]:
+        cur = self._conn.execute(
+            "SELECT market, ts, bids, asks FROM snapshots "
+            "WHERE market = ? ORDER BY ts ASC LIMIT ?",
+            (market, limit),
+        )
+        return list(cur.fetchall())
+
+    # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:
         out = {}
         for table in ("snapshots", "detections", "risk"):
