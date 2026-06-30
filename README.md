@@ -112,6 +112,14 @@ python main.py --dbstats
 ```
 This is the foundation for replay, analytics, and a charting dashboard.
 
+### Replay / backtesting (offline)
+With `STORAGE_ENABLED=true` and `PERSIST_SNAPSHOTS=true` set while collecting,
+replay the recorded L2 books through the live detector + risk stack — no
+network needed. Useful for tuning thresholds against a real recorded session:
+```bash
+python main.py --replay SOL-PERP
+```
+
 ### Dashboard (TradingView Lightweight Charts)
 With storage enabled and some data collected, serve the chart UI:
 ```bash

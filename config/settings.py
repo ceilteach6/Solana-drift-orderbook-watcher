@@ -96,6 +96,82 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Fail fast on a misconfigured environment.
+
+        Catching this once at startup beats letting a bad value (e.g. an
+        UPDATE_FREQUENCY_MS of 0) turn into a silent runtime failure mode —
+        a tight polling loop hammering the RPC endpoint, a ZeroDivisionError
+        deep in a detector, or a risk gate that can never clear. Every
+        problem is collected so the user fixes the .env in one pass instead
+        of hitting them one at a time.
+        """
+        errors: list[str] = []
+
+        def positive(name: str, value: float) -> None:
+            if not value > 0:
+                errors.append(f"{name} must be > 0 (got {value!r})")
+
+        def non_negative(name: str, value: float) -> None:
+            if value < 0:
+                errors.append(f"{name} must be >= 0 (got {value!r})")
+
+        def unit_range(name: str, value: float, *, low_exclusive: bool = False) -> None:
+            lo_ok = value > 0 if low_exclusive else value >= 0
+            if not (lo_ok and value <= 1):
+                bound = "(0, 1]" if low_exclusive else "[0, 1]"
+                errors.append(f"{name} must be in {bound} (got {value!r})")
+
+        if not self.markets:
+            errors.append("MARKETS must list at least one market")
+
+        positive("ORDERBOOK_DEPTH", self.orderbook_depth)
+        positive("UPDATE_FREQUENCY_MS", self.update_frequency_ms)
+
+        if self.repeated_min_count < 2:
+            errors.append(f"REPEATED_MIN_COUNT must be >= 2 (got {self.repeated_min_count!r})")
+        non_negative("REPEATED_SIZE_TOLERANCE", self.repeated_size_tolerance)
+        if self.layering_min_levels < 2:
+            errors.append(f"LAYERING_MIN_LEVELS must be >= 2 (got {self.layering_min_levels!r})")
+        positive("FLICKER_WINDOW_SEC", self.flicker_window_sec)
+        if self.flicker_min_events < 1:
+            errors.append(f"FLICKER_MIN_EVENTS must be >= 1 (got {self.flicker_min_events!r})")
+        unit_range("IMBALANCE_MIN_RATIO", self.imbalance_min_ratio, low_exclusive=True)
+        if self.imbalance_min_levels < 1:
+            errors.append(f"IMBALANCE_MIN_LEVELS must be >= 1 (got {self.imbalance_min_levels!r})")
+        positive("SPOOF_WINDOW_SEC", self.spoof_window_sec)
+        if not self.spoof_wall_ratio > 1:
+            errors.append(f"SPOOF_WALL_RATIO must be > 1 (got {self.spoof_wall_ratio!r})")
+        non_negative("SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move)
+        unit_range("SPOOF_PULL_FRACTION", self.spoof_pull_fraction)
+
+        unit_range("RISK_SMOOTHING", self.risk_smoothing, low_exclusive=True)
+        unit_range("RISK_ALERT_THRESHOLD", self.risk_alert_threshold, low_exclusive=True)
+        unit_range("RISK_CLEAR_THRESHOLD", self.risk_clear_threshold)
+        non_negative("RISK_ALERT_COOLDOWN_SEC", self.risk_alert_cooldown_sec)
+        if self.risk_aggregation and self.risk_clear_threshold >= self.risk_alert_threshold:
+            errors.append(
+                "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
+                f"(got clear={self.risk_clear_threshold!r}, alert={self.risk_alert_threshold!r}) "
+                "— otherwise an elevated risk state can never clear (no hysteresis gap)"
+            )
+
+        if self.healthcheck_enabled:
+            positive("HEALTHCHECK_INTERVAL_SEC", self.healthcheck_interval_sec)
+
+        if self.dashboard_port < 1 or self.dashboard_port > 65535:
+            errors.append(f"DASHBOARD_PORT must be in [1, 65535] (got {self.dashboard_port!r})")
+
+        unit_range("ALERT_MIN_SCORE", self.alert_min_score)
+        if self.alert_format not in ("console", "json"):
+            errors.append(f"ALERT_FORMAT must be 'console' or 'json' (got {self.alert_format!r})")
+
+        non_negative("RUN_DURATION_SEC", self.run_duration_sec)
+
+        if errors:
+            joined = "\n  - ".join(errors)
+            raise ValueError(f"Invalid configuration ({len(errors)} issue(s)):\n  - {joined}")
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""

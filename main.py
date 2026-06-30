@@ -19,12 +19,25 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay a recorded session through the live detector stack (requires
+STORAGE_ENABLED=true + PERSIST_SNAPSHOTS=true while collecting):
+  python main.py --replay SOL-PERP
 """
 
 import asyncio
 import sys
 
-from config.settings import settings
+try:
+    from config.settings import settings
+except ValueError as exc:
+    # Settings.__post_init__ raises on a misconfigured .env (bad threshold,
+    # zero polling interval, etc.) — surface just the message, not a
+    # traceback, since this is a config problem, not a code crash.
+    print(f"❌ Configuration error: {exc}")
+    print("\n   Fix the values in your .env (see config.example.env) and retry.")
+    sys.exit(1)
+
 from src.watcher import Watcher
 
 
@@ -52,6 +65,18 @@ if __name__ == "__main__":
         from src.dashboard import run_dashboard
 
         sys.exit(run_dashboard(settings))
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import replay_main
+
+        idx = sys.argv.index("--replay")
+        rest = sys.argv[idx + 1:]
+        market = rest[0] if rest and not rest[0].startswith("--") else None
+        if market is None:
+            print("Usage: python main.py --replay <MARKET>")
+            print(f"   Known markets: {', '.join(settings.markets)}")
+            sys.exit(1)
+        sys.exit(replay_main(settings, market))
 
     try:
         asyncio.run(main())

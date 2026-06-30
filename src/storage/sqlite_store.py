@@ -189,6 +189,21 @@ class SQLiteStore(Store):
             for r in rows
         ]
 
+    def iter_snapshots(self, market: str, limit: int = 100_000):
+        """Yield ``(ts, bids, asks)`` for persisted L2 books, oldest first.
+
+        ``bids``/``asks`` are ``[[price, size], ...]`` lists, as stored by
+        :func:`_levels_to_json`. Requires ``PERSIST_SNAPSHOTS=true`` to have
+        been set while the data was collected — used by :mod:`src.replay`.
+        """
+        cur = self._conn.execute(
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "ORDER BY ts ASC LIMIT ?",
+            (market, limit),
+        )
+        for row in cur.fetchall():
+            yield row["ts"], json.loads(row["bids"]), json.loads(row["asks"])
+
     # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:
         out = {}
