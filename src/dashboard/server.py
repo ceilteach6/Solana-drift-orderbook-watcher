@@ -66,6 +66,11 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            # SQLite treats a negative LIMIT as "no limit", and an unbounded
+            # positive value lets a client force a multi-million-row scan —
+            # clamp to a sane range instead of trusting the query string.
+            if not (1 <= limit <= 5000):
+                return self._send_json({"error": "limit must be between 1 and 5000"}, 400)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
