@@ -61,7 +61,8 @@ class Watcher:
         try:
             await self._run_loop()
         finally:
-            await self.feed.close()
+            if self.feed is not None:
+                await self.feed.close()
             if self.store is not None:
                 self.store.close()
 

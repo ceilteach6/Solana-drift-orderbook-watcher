@@ -60,15 +60,16 @@ def _make_handler(db_path: str):
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
+
+            if route in ("/", "/index.html"):
+                return self._send_html()
+
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
             try:
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
-
-            if route in ("/", "/index.html"):
-                return self._send_html()
 
             # Each request opens its own short-lived read connection.
             store = SQLiteStore(db_path)

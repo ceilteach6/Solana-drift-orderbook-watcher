@@ -61,6 +61,24 @@ def test_record_detections_empty_is_noop(tmp_path):
     store.close()
 
 
+class _NotJsonSerializable:
+    def __str__(self):
+        return "not-json-serializable"
+
+
+def test_record_detections_survives_non_serializable_details(tmp_path):
+    # A single bad value in `details` must not lose the whole executemany
+    # batch -- it should fall back to str() for that value instead.
+    store = make_store(tmp_path)
+    bad = det("imbalance", 0.9)
+    bad.details = {"weird": _NotJsonSerializable()}
+    store.record_detections(1.0, [bad, det("flicker", 0.7)])
+    assert store.counts()["detections"] == 2
+    recent = store.recent_detections(10)
+    assert {r["detector"] for r in recent} == {"imbalance", "flicker"}
+    store.close()
+
+
 def test_record_risk(tmp_path):
     store = make_store(tmp_path)
     store.record_risk("SOL-PERP", 1.0, 0.55, 150.0)

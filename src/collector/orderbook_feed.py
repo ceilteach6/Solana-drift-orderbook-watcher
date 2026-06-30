@@ -122,8 +122,13 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             out.append(Level(_to_float(price), _to_float(size)))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or [])
-    asks = levels(getattr(l2, "asks", None) or [])
+    # OrderbookSnapshot requires bids descending / asks ascending (best price
+    # first) — every detector, mid/spread calculation, and the storage layer
+    # relies on bids[0]/asks[0] being the best price. driftpy's L2 helper
+    # ordering has shifted across releases, so we sort defensively here rather
+    # than trust upstream order.
+    bids = sorted(levels(getattr(l2, "bids", None) or []), key=lambda lvl: lvl.price, reverse=True)
+    asks = sorted(levels(getattr(l2, "asks", None) or []), key=lambda lvl: lvl.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

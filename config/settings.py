@@ -48,7 +48,7 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    markets: tuple[str, ...] = field(default_factory=tuple)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
 
@@ -100,13 +100,13 @@ class Settings:
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    markets = tuple(m.strip() for m in markets_raw.split(",") if m.strip())
 
     return Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=markets or ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),

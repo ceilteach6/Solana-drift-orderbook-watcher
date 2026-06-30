@@ -79,6 +79,20 @@ def _levels_to_json(levels) -> str:
     return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
 
 
+def _safe_json(value) -> str:
+    """Serialize detector ``details`` defensively.
+
+    Detail dicts come from third-party-ish detector code and may carry values
+    json can't natively encode (e.g. a numpy scalar). Falling back to ``str``
+    keeps one bad value from raising and losing the *whole* batch of
+    detections in the same ``executemany`` call.
+    """
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return json.dumps(value, default=str)
+
+
 class SQLiteStore(Store):
     def __init__(self, db_path: str = "data/watcher.db") -> None:
         self.db_path = db_path
@@ -120,7 +134,7 @@ class SQLiteStore(Store):
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
         rows = [
-            (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
+            (d.market, ts, d.detector, d.score, d.message, _safe_json(d.details))
             for d in detections
         ]
         if not rows:
