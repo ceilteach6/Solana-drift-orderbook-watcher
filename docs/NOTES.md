@@ -47,7 +47,7 @@ kész; csak az értékeket kell beírnod.
 | `src/replay.py` — replay/backtest a perzisztált snapshotokon (`--replay`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Push a távoli branchre | ✅ működik |
 
 ---
 
