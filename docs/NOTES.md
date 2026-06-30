@@ -43,7 +43,8 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/replay/` — replay/backtesting harness (`--replay`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -79,6 +80,15 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Replay / backtesting ✅
+- **Replay harness** (`src/replay/`) — a perzisztált L2 könyveket
+  (`PERSIST_SNAPSHOTS=true` a felvételkor) újrajátssza a friss (aktuális
+  `.env`-beli) küszöbökkel épített detektor-stacken + risk-aggregátoron át.
+  Csak olvas, semmit nem ír vissza az adatbázisba — tisztán küszöbhangoláshoz
+  való: módosíts egy `THRESHOLD`-ot, futtasd újra, nézd meg, hány találat jön
+  ki. `python main.py --replay [--replay-market=SOL-PERP] [--replay-limit=N]`.
+  *(kész)*
+
 ### Robosztusság ✅
 - **Config-validáció indításkor** (`config/settings.py: Settings.__post_init__`) —
   a detektor-küszöbök (pl. `FLICKER_MIN_EVENTS`, `REPEATED_MIN_COUNT`,
@@ -99,12 +109,11 @@ nem avatkozik be. Prioritás szerinti felépítés:
   `tests/test_dashboard.py`, `tests/test_storage.py`).
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
-2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+1. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
+2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---

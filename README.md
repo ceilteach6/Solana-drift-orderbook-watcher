@@ -120,6 +120,18 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Replay / threshold tuning
+With `PERSIST_SNAPSHOTS=true` set during a recording run, re-run the live
+detector stack over the persisted L2 books using your *current* `.env`
+thresholds — useful for tuning a `*_MIN_*` / `*_RATIO` setting against real
+history without a live connection:
+```bash
+python main.py --replay                          # all markets with snapshots
+python main.py --replay --replay-market=SOL-PERP
+python main.py --replay --replay-limit=20000      # most recent N snapshots
+```
+Read-only: it never writes back to the database.
+
 ---
 
 ## 🔧 How the Drift integration works

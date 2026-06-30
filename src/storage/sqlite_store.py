@@ -216,6 +216,36 @@ class SQLiteStore(Store):
         )
         return list(cur.fetchall())
 
+    # ------------------------------------------------------------------ #
+    # Raw L2-book readback — the foundation for replay/backtesting. Only
+    # populated when PERSIST_SNAPSHOTS=true was set on the recording run.
+    # ------------------------------------------------------------------ #
+    def markets_with_snapshots(self) -> list[str]:
+        cur = self._db.execute("SELECT DISTINCT market FROM snapshots ORDER BY market")
+        return [r["market"] for r in cur.fetchall()]
+
+    def snapshot_rows(self, market: str, limit: int | None = None) -> list[sqlite3.Row]:
+        """Raw snapshot rows for ``market``, oldest first.
+
+        Each row carries ``ts``, ``bids``, ``asks`` (the latter two as the JSON
+        text written by :func:`_levels_to_json`). When ``limit`` is given, the
+        *most recent* ``limit`` snapshots are returned (still chronological).
+        """
+        if limit is None:
+            cur = self._db.execute(
+                "SELECT ts, bids, asks FROM snapshots WHERE market = ? ORDER BY ts ASC",
+                (market,),
+            )
+            return list(cur.fetchall())
+        cur = self._db.execute(
+            "SELECT ts, bids, asks FROM ("
+            "  SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "  ORDER BY ts DESC LIMIT ?"
+            ") ORDER BY ts ASC",
+            (market, limit),
+        )
+        return list(cur.fetchall())
+
     def summary(self) -> str:
         counts = self.counts()
         lines = ["📦 Storage summary", f"   DB: {self.db_path}"]
