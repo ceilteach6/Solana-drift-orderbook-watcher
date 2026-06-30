@@ -119,16 +119,22 @@ def run_selftest(settings) -> list[SelfTestResult]:
     for target, build in _SCENARIOS.items():
         fired = False
         max_score = 0.0
+        error = None
         history: list = []
         for snapshot in build():
             for detector in detectors:
-                for d in detector.analyze(snapshot, history):
+                try:
+                    findings = detector.analyze(snapshot, history)
+                except Exception as exc:  # a broken detector must not be fatal
+                    error = f"{detector.name} raised: {exc}"
+                    continue
+                for d in findings:
                     if d.detector == target:
                         fired = True
                         max_score = max(max_score, d.score)
             history.append(snapshot)
-        note = "" if fired else "did not fire on its scenario"
-        results.append(SelfTestResult(target, fired, round(max_score, 3), note))
+        note = error or ("" if fired else "did not fire on its scenario")
+        results.append(SelfTestResult(target, fired and not error, round(max_score, 3), note))
 
     results.append(_test_risk_aggregator(settings, detectors))
     return results
@@ -138,16 +144,23 @@ def _test_risk_aggregator(settings, detectors) -> SelfTestResult:
     aggregator = RiskAggregator(settings)
     snapshot = _sc_imbalance()[0]
     fired = False
+    error = None
     history: list = []
     for tick in range(8):
         detections: list = []
         for detector in detectors:
-            detections.extend(detector.analyze(snapshot, history))
+            try:
+                detections.extend(detector.analyze(snapshot, history))
+            except Exception as exc:  # a broken detector must not be fatal
+                error = f"{detector.name} raised: {exc}"
+                continue
         history.append(snapshot)
         if aggregator.update(_MARKET, float(tick), detections) is not None:
             fired = True
-    note = "" if fired else "no consolidated risk alert from a sustained signal"
-    return SelfTestResult("risk-aggregator", fired, round(aggregator.score(_MARKET), 3), note)
+    note = error or ("" if fired else "no consolidated risk alert from a sustained signal")
+    return SelfTestResult(
+        "risk-aggregator", fired and not error, round(aggregator.score(_MARKET), 3), note
+    )
 
 
 def format_report(results: list[SelfTestResult]) -> str:

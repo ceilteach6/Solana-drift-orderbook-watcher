@@ -20,7 +20,7 @@ class RepeatedSizeDetector(BaseDetector):
 
         clusters = cluster_sizes(sizes, self.settings.repeated_size_tolerance)
         top = clusters[0]
-        min_count = self.settings.repeated_min_count
+        min_count = max(self.settings.repeated_min_count, 1)
         if top.count < min_count:
             return []
 

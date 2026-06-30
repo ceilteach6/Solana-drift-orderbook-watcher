@@ -55,10 +55,10 @@ class FlickerDetector(BaseDetector):
                 best_key = key
 
         min_events = self.settings.flicker_min_events
-        if best_transitions < min_events:
+        if best_key is None or best_transitions < min_events:
             return []
 
-        side, price = best_key  # type: ignore[misc]
+        side, price = best_key
         score = min(1.0, best_transitions / (min_events * 2))
         return [
             Detection(

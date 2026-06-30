@@ -96,6 +96,58 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Fail fast on nonsensical config instead of crashing mid-run.
+
+        Several detectors divide by these thresholds (or index into a
+        result that only exists once the threshold is met); a value of 0
+        or less doesn't mean "more sensitive", it means a ZeroDivisionError
+        or IndexError the next time that detector runs.
+        """
+        _require_positive_int(
+            "REPEATED_MIN_COUNT", self.repeated_min_count,
+            "ORDERBOOK_DEPTH", self.orderbook_depth,
+            "UPDATE_FREQUENCY_MS", self.update_frequency_ms,
+            "LAYERING_MIN_LEVELS", self.layering_min_levels,
+            "FLICKER_MIN_EVENTS", self.flicker_min_events,
+            "IMBALANCE_MIN_LEVELS", self.imbalance_min_levels,
+        )
+        _require_positive_float(
+            "SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move,
+            "SPOOF_WALL_RATIO", self.spoof_wall_ratio,
+            "FLICKER_WINDOW_SEC", self.flicker_window_sec,
+            "SPOOF_WINDOW_SEC", self.spoof_window_sec,
+        )
+        _require_range("IMBALANCE_MIN_RATIO", self.imbalance_min_ratio, 0.0, 1.0)
+        _require_range("SPOOF_PULL_FRACTION", self.spoof_pull_fraction, 0.0, 1.0)
+        _require_range("RISK_SMOOTHING", self.risk_smoothing, 0.0, 1.0)
+        _require_range("RISK_ALERT_THRESHOLD", self.risk_alert_threshold, 0.0, 1.0)
+        _require_range("RISK_CLEAR_THRESHOLD", self.risk_clear_threshold, 0.0, 1.0)
+        if self.risk_clear_threshold >= self.risk_alert_threshold:
+            raise ValueError(
+                "RISK_CLEAR_THRESHOLD "
+                f"({self.risk_clear_threshold}) must be lower than "
+                f"RISK_ALERT_THRESHOLD ({self.risk_alert_threshold}), or the "
+                "aggregator can never leave its elevated state."
+            )
+
+
+def _require_positive_int(*name_value_pairs) -> None:
+    for name, value in zip(name_value_pairs[0::2], name_value_pairs[1::2]):
+        if not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer, got {value!r}")
+
+
+def _require_positive_float(*name_value_pairs) -> None:
+    for name, value in zip(name_value_pairs[0::2], name_value_pairs[1::2]):
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(f"{name} must be > 0, got {value!r}")
+
+
+def _require_range(name: str, value: float, lo: float, hi: float) -> None:
+    if not (lo <= value <= hi):
+        raise ValueError(f"{name} must be between {lo} and {hi}, got {value!r}")
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""

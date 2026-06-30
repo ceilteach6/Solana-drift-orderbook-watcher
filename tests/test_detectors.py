@@ -231,5 +231,52 @@ def test_spoof_pull_needs_history():
     assert det.analyze(_prior_with_bid_wall(), []) == []
 
 
+# --------------------------------------------------------------------------- #
+# Degenerate thresholds must degrade gracefully, never crash.
+#
+# config.settings.Settings now rejects these values at startup, but the
+# detectors are also exercised directly (here, and by any custom detector a
+# user wires in per src/watcher.py's docstring) with plain settings objects
+# that bypass that validation -- so each detector must be safe on its own.
+# --------------------------------------------------------------------------- #
+def test_flicker_min_events_zero_does_not_crash_on_static_book():
+    det = FlickerDetector(make_settings(flicker_min_events=0, flicker_window_sec=10))
+    base = 3000.0
+    history = [
+        snap(bids=[(100.0, 5.0)], asks=[(101.0, 1.0)], ts=base + i) for i in range(3)
+    ]
+    current = history.pop()
+    assert det.analyze(current, history) == []
+
+
+def test_repeated_size_min_count_zero_does_not_crash():
+    det = RepeatedSizeDetector(make_settings(repeated_min_count=0))
+    s = snap(bids=[(100, 10.0), (99, 5.0)], asks=[(101, 3.0)])
+    det.analyze(s, [])  # must not raise ZeroDivisionError
+
+
+def test_layering_min_levels_zero_does_not_crash_on_empty_side():
+    det = LayeringDetector(make_settings(layering_min_levels=0))
+    s = snap(bids=[], asks=[])
+    assert det.analyze(s, []) == []  # must not raise IndexError
+
+
+def test_layering_min_levels_zero_does_not_crash_on_nonempty_side():
+    det = LayeringDetector(make_settings(layering_min_levels=0))
+    s = snap(bids=[(100, 10.0), (99, 10.0)], asks=[(101, 5.0)])
+    det.analyze(s, [])  # must not raise ZeroDivisionError
+
+
+def test_spoof_pull_min_price_move_zero_does_not_crash():
+    det = SpoofPullDetector(make_settings(spoof_min_price_move=0.0))
+    prior = _prior_with_bid_wall(ts=0.0)
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0), (100.0, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    det.analyze(current, [prior])  # must not raise ZeroDivisionError
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

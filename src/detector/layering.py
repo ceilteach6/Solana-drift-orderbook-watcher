@@ -17,12 +17,12 @@ class LayeringDetector(BaseDetector):
 
     def analyze(self, snapshot, history) -> list[Detection]:
         detections: list[Detection] = []
-        min_levels = self.settings.layering_min_levels
+        min_levels = max(self.settings.layering_min_levels, 1)
         tolerance = self.settings.repeated_size_tolerance
 
         for side_name, levels in (("bid", snapshot.bids), ("ask", snapshot.asks)):
             sizes = [lvl.size for lvl in levels if lvl.size > 0]
-            if len(sizes) < min_levels:
+            if not sizes or len(sizes) < min_levels:
                 continue
             clusters = cluster_sizes(sizes, tolerance)
             top = clusters[0]
