@@ -46,6 +46,7 @@ class Settings:
     rpc_url: str
     drift_env: str
     keypair_path: str
+    venue: str = "drift"
 
     # --- Markets / feed ---
     markets: list[str] = field(default_factory=list)
@@ -85,6 +86,16 @@ class Settings:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8787
 
+    # --- Wallet monitor (maker-level) ---
+    wallet_monitor_enabled: bool = False
+    wallet_window_sec: float = 30.0
+    wallet_churn_ratio: float = 0.8       # cancels/placements that reads as churn
+    wallet_repeat_min: int = 6            # min orders before repeated-size counts
+    wallet_multi_market: int = 3          # markets that read as "coordinated"
+    wallet_alert_threshold: float = 0.7
+    wallet_alert_cooldown_sec: float = 60.0
+    wallet_top_n: int = 10
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -106,6 +117,7 @@ def load_settings() -> Settings:
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
+        venue=_get_str("VENUE", "drift").lower(),
         markets=markets or ["SOL-PERP"],
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
@@ -136,6 +148,15 @@ def load_settings() -> Settings:
         in ("1", "true", "yes", "on"),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
+        wallet_monitor_enabled=_get_str("WALLET_MONITOR_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        wallet_window_sec=_get_float("WALLET_WINDOW_SEC", 30.0),
+        wallet_churn_ratio=_get_float("WALLET_CHURN_RATIO", 0.8),
+        wallet_repeat_min=_get_int("WALLET_REPEAT_MIN", 6),
+        wallet_multi_market=_get_int("WALLET_MULTI_MARKET", 3),
+        wallet_alert_threshold=_get_float("WALLET_ALERT_THRESHOLD", 0.7),
+        wallet_alert_cooldown_sec=_get_float("WALLET_ALERT_COOLDOWN_SEC", 60.0),
+        wallet_top_n=_get_int("WALLET_TOP_N", 10),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),

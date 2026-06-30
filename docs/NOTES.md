@@ -43,7 +43,9 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/replay/` — replay / backtesting tárolt snapshotokon (`--replay`) | ✅ kész |
+| `src/wallet/` — Drift-maker wallet-monitor + reputáció (`--wallets`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -79,13 +81,33 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Replay ✅
+- **Replay / backtesting** (`src/replay/`) — tárolt L2 snapshotok újrajátszása a
+  detektorokon a *jelenlegi* küszöbökkel → offline hangolás élő piac nélkül.
+  `python main.py --replay`. (PERSIST_SNAPSHOTS=true adat kell hozzá.) *(kész)*
+
+### Multi-venue keret ✅ (alap) / 🚩 nyitott flag a konkrét tőzsdékre
+- A collector mostantól **venue-választós**: `VENUE=drift|synthetic`, regisztrációs
+  táblával (`_VENUE_BUILDERS`) az `orderbook_feed.py`-ban. A keret kész — egy új
+  Solana-tőzsde = egy új feed + egy sor a regiszterben. *(keret kész)*
+- 🚩 **NYITOTT:** a konkrét második tőzsde-collector (Phoenix/OpenBook/Zeta/Mango)
+  megírása — a valódi integráció a venue SDK-ját + a felhasználó RPC-jét igényli
+  a teszteléshez.
+
+### Wallet-monitor ✅ (Drift-maker szint) / 🚩 nyitott flag a teljes láncra
+- **Drift-maker wallet-monitor** (`src/wallet/monitor.py`) — a UserMap-szintű
+  rendelésekből walletenként: churn (place/cancel), ismételt méret, multi-piac
+  jelenlét → gyanússági score + riasztás (cooldownnal). `top_wallets` rangsor,
+  `wallets` tábla, `python main.py --wallets`. `WALLET_MONITOR_ENABLED`. *(kész)*
+- 🚩 **NYITOTT:** "egész Solana top 5000 wallet" bármilyen tevékenységre —
+  indexer/analitika API kell (Helius/Dune/Flipside/Vybe → a te elérésed).
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
-2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+1. **Konkrét multi-venue collector** (pl. OpenBook) — a venue-keretre építve.
+2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---

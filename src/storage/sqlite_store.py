@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS risk (
     mid       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_risk_market_ts ON risk(market, ts);
+
+CREATE TABLE IF NOT EXISTS wallets (
+    wallet      TEXT PRIMARY KEY,
+    last_ts     REAL,
+    score       REAL,
+    activity    INTEGER,
+    placements  INTEGER,
+    cancels     INTEGER,
+    markets     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wallets_score ON wallets(score);
 """
 
 
@@ -139,6 +150,33 @@ class SQLiteStore(Store):
         )
         self._conn.commit()
 
+    def upsert_wallet(self, stat, ts: float) -> None:
+        """Insert or update a wallet's latest reputation snapshot."""
+        import json as _json
+
+        self._conn.execute(
+            "INSERT INTO wallets(wallet, last_ts, score, activity, placements, "
+            "cancels, markets) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(wallet) DO UPDATE SET "
+            "last_ts=excluded.last_ts, score=excluded.score, "
+            "activity=excluded.activity, placements=excluded.placements, "
+            "cancels=excluded.cancels, markets=excluded.markets",
+            (
+                stat.wallet, ts, stat.score, stat.activity(),
+                len(stat.places), len(stat.cancels),
+                _json.dumps(sorted(stat.markets())),
+            ),
+        )
+        self._conn.commit()
+
+    def top_wallets(self, limit: int = 10) -> list[sqlite3.Row]:
+        cur = self._conn.execute(
+            "SELECT wallet, score, activity, placements, cancels, markets "
+            "FROM wallets ORDER BY score DESC, activity DESC LIMIT ?",
+            (limit,),
+        )
+        return list(cur.fetchall())
+
     # ------------------------------------------------------------------ #
     # Read APIs for the dashboard (bucketed to whole seconds so the chart
     # gets unique, ascending time values).
@@ -196,6 +234,24 @@ class SQLiteStore(Store):
             cur = self._conn.execute(f"SELECT COUNT(*) AS n FROM {table}")
             out[table] = cur.fetchone()["n"]
         return out
+
+    def snapshot_markets(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM snapshots ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
+
+    def read_snapshots_raw(self, market: str, limit: int | None = None):
+        """Stored L2 books for a market, oldest first (for replay)."""
+        sql = (
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "ORDER BY ts ASC, id ASC"
+        )
+        params: tuple = (market,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (market, limit)
+        return list(self._conn.execute(sql, params).fetchall())
 
     def recent_detections(self, limit: int = 10) -> list[sqlite3.Row]:
         cur = self._conn.execute(

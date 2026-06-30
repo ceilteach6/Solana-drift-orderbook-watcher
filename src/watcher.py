@@ -22,6 +22,7 @@ from src.detector.base import Detection
 from src.risk import RiskAggregator
 from src.selftest import run_selftest
 from src.storage import SQLiteStore
+from src.wallet import WalletMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class Watcher:
         self.detectors = self._build_detectors(settings)
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
+        self.wallet_monitor = WalletMonitor(settings) if settings.wallet_monitor_enabled else None
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
@@ -133,7 +135,23 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
+        self._monitor_wallets(market, snapshot)
         self._persist(market, snapshot, detections)
+
+    def _monitor_wallets(self, market: str, snapshot) -> None:
+        if self.wallet_monitor is None or not snapshot.orders:
+            return
+        alerts = self.wallet_monitor.update(market, snapshot.timestamp, snapshot.orders)
+        if alerts:
+            self.alert.emit(alerts)
+        if self.store is not None:
+            try:
+                if alerts:
+                    self.store.record_detections(snapshot.timestamp, alerts)
+                for stat in self.wallet_monitor.top_wallets(self.settings.wallet_top_n):
+                    self.store.upsert_wallet(stat, snapshot.timestamp)
+            except Exception:
+                logger.exception("Wallet storage write failed for %s", market)
 
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
@@ -152,10 +170,13 @@ class Watcher:
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
+        print(f"   Venue     : {self.settings.venue}")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         mode = "risk-aggregated" if self.aggregator else "raw per-detection"
         print(f"   Mode      : {mode}")
+        if self.wallet_monitor is not None:
+            print("   Wallets   : maker monitor on")
         print(f"   Interval  : {self.settings.update_frequency_ms} ms")
         print(f"   Alerts    : {self.settings.alert_format} "
               f"(min score {self.settings.alert_min_score}) → "

@@ -120,6 +120,22 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Replay / backtest (optional)
+Re-run stored snapshots through the detectors with your *current* thresholds —
+tune `.env`, replay, compare — no live market needed (requires
+`PERSIST_SNAPSHOTS=true` data):
+```bash
+python main.py --replay
+```
+
+### Wallet monitor (maker-level)
+Set `WALLET_MONITOR_ENABLED=true` to attribute orderbook activity to individual
+wallets and flag bot-like makers (churn, repeated sizes, multi-market presence).
+List the most active / suspicious wallets:
+```bash
+python main.py --wallets
+```
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -176,14 +192,25 @@ Then register it in `watcher.py`. That's it.
 
 ---
 
-## 🗺️ Roadmap (extension ideas)
+## 🗺️ Roadmap
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+Done:
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord alerts (webhook sink)
+- [x] Risk aggregator (smoothed, consolidated alerts)
+- [x] Algorithmic self-test + periodic health-check
+- [x] Time-series storage (SQLite) and replay/backtesting
+- [x] Charting dashboard (TradingView Lightweight Charts)
+
+- [x] Wallet-level monitor & reputation — Drift makers (`--wallets`)
+
+Open:
+- [ ] **Multi-venue collectors — whole-Solana orderbook coverage**
+      (Phoenix, OpenBook, Zeta, Mango feeding the same pipeline; `VENUE=`)
+- [ ] **Whole-Solana wallet scan — top N active wallets** (needs an indexer
+      API: Helius / Dune / Flipside / Vybe)
+- [ ] Prometheus metrics exporter
 - [ ] ML-based anomaly detection alongside the heuristics
-- [ ] Wallet-level reputation / blocklist (optional module)
-- [ ] Prometheus metrics (modeled on the Drift-style exporter)
 
 ---
 

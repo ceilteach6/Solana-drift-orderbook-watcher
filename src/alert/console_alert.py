@@ -23,6 +23,7 @@ _ICONS = {
     "risk": "🚨",
     "risk_aggregator": "🚨",
     "healthcheck": "🔬",
+    "wallet": "👛",
 }
 
 
