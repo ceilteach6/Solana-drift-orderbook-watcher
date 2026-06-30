@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -29,9 +30,12 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
+# Hard cap on ?limit= so a client can't force an unbounded result set to be
+# materialized in memory and serialized to JSON in one go.
+_MAX_LIMIT = 5000
 
 
-def _make_handler(db_path: str):
+def _make_handler(store: SQLiteStore, lock: threading.Lock):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet default logging
             return
@@ -66,33 +70,38 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            limit = max(1, min(limit, _MAX_LIMIT))
 
             if route in ("/", "/index.html"):
                 return self._send_html()
 
-            # Each request opens its own short-lived read connection.
-            store = SQLiteStore(db_path)
+            # One connection is shared across all request threads (opened
+            # once in run_dashboard) rather than reconnected — and the
+            # schema re-applied — on every request. SQLite connections
+            # aren't safe for concurrent use from multiple threads, so the
+            # shared `lock` serializes access to it; the lock is held only
+            # around the DB calls, not the response write.
             try:
-                store.connect()
-                if route == "/api/markets":
-                    return self._send_json(store.markets())
-                if route == "/api/series":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json({
-                        "price": store.price_series(market, limit),
-                        "risk": store.risk_series(market, limit),
-                    })
-                if route == "/api/detections":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json(store.detection_markers(market, limit))
-                return self._send_json({"error": "not found"}, 404)
+                with lock:
+                    if route == "/api/markets":
+                        payload = store.markets()
+                    elif route == "/api/series":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        payload = {
+                            "price": store.price_series(market, limit),
+                            "risk": store.risk_series(market, limit),
+                        }
+                    elif route == "/api/detections":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        payload = store.detection_markers(market, limit)
+                    else:
+                        return self._send_json({"error": "not found"}, 404)
             except Exception as exc:
                 logger.exception("dashboard request failed")
                 return self._send_json({"error": str(exc)}, 500)
-            finally:
-                store.close()
+            return self._send_json(payload)
 
     return Handler
 
@@ -104,7 +113,10 @@ def run_dashboard(settings) -> int:
         print("   Run the watcher with STORAGE_ENABLED=true first.")
         return 1
 
-    handler = _make_handler(settings.db_path)
+    store = SQLiteStore(settings.db_path)
+    store.connect(check_same_thread=False)
+    lock = threading.Lock()
+    handler = _make_handler(store, lock)
     server = ThreadingHTTPServer(
         (settings.dashboard_host, settings.dashboard_port), handler
     )
@@ -117,4 +129,5 @@ def run_dashboard(settings) -> int:
         print("\n⏹️  Dashboard stopped.")
     finally:
         server.server_close()
+        store.close()
     return 0

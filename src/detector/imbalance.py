@@ -22,8 +22,13 @@ class ImbalanceDetector(BaseDetector):
 
     def analyze(self, snapshot, history) -> list[Detection]:
         n = self.settings.imbalance_min_levels
-        bid_vol = sum(lvl.size for lvl in snapshot.bids[:n] if lvl.size > 0)
-        ask_vol = sum(lvl.size for lvl in snapshot.asks[:n] if lvl.size > 0)
+        # Filter zero-size placeholder levels *before* taking the top-n slice,
+        # so a placeholder interspersed among the top levels can't silently
+        # shrink the window below n real levels.
+        top_bids = [lvl for lvl in snapshot.bids if lvl.size > 0][:n]
+        top_asks = [lvl for lvl in snapshot.asks if lvl.size > 0][:n]
+        bid_vol = sum(lvl.size for lvl in top_bids)
+        ask_vol = sum(lvl.size for lvl in top_asks)
         total = bid_vol + ask_vol
         if total <= 0:
             return []

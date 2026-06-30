@@ -17,12 +17,50 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import urllib.request
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+
+class _DaemonWorkerPool:
+    """A fixed pool of daemon worker threads consuming from a queue.
+
+    Unlike ``concurrent.futures.ThreadPoolExecutor``, whose workers are
+    non-daemon and get joined by an ``atexit`` hook before the interpreter
+    can exit, these workers are daemons: a slow in-flight webhook call
+    (``_send`` blocks up to its 5s timeout) never delays process shutdown.
+    The fixed-size pool plus an unbounded in-memory queue still bounds
+    concurrent network calls during an alert storm — extra work just queues
+    (cheap) instead of spawning one OS thread per alert (not cheap).
+    """
+
+    def __init__(self, max_workers: int, thread_name_prefix: str) -> None:
+        self._queue: queue.Queue = queue.Queue()
+        for i in range(max_workers):
+            threading.Thread(
+                target=self._run, daemon=True, name=f"{thread_name_prefix}-{i}"
+            ).start()
+
+    def _run(self) -> None:
+        while True:
+            fn, args = self._queue.get()
+            try:
+                fn(*args)
+            except Exception:
+                logger.exception("Webhook worker task failed")
+
+    def submit(self, fn, *args) -> None:
+        self._queue.put((fn, args))
+
+
+# Shared across all WebhookAlert instances: bounds concurrent deliveries so an
+# alert storm (e.g. a noisy market tripping many detectors at once) queues
+# requests instead of spawning one OS thread per alert.
+_EXECUTOR = _DaemonWorkerPool(max_workers=4, thread_name_prefix="webhook-alert")
 
 
 class WebhookAlert(Alert):
@@ -38,13 +76,12 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared executor to avoid blocking the
+        event loop (and to bound concurrency during an alert storm)."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _EXECUTOR.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
