@@ -43,10 +43,11 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/metrics/` — Prometheus exporter (`METRICS_ENABLED`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Push a távoli branchre | ✅ kész |
 
 ---
 
@@ -79,13 +80,23 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Megfigyelhetőség ✅
+- **Prometheus exporter** (`src/metrics/`) — a futó watcher folyamaton belül
+  (nem a SQLite-ból, hanem élő számlálókból/gauge-okból) szolgál ki egy
+  `/metrics` végpontot Prometheus text-exposition formátumban: lekért
+  snapshotok, detekciók, detektor-hibák, kiadott riasztások (piaconként és
+  detektoronként), valamint az aktuális simított risk-score gauge-ja
+  piaconként. Kapcsoló: `METRICS_ENABLED=true` (+ `METRICS_HOST`,
+  `METRICS_PORT`, alapból `9090`). Külön szál, nem blokkolja az event loopot;
+  bind-hiba esetén (pl. foglalt port) a watcher metrikák nélkül fut tovább,
+  nem áll le. *(kész, új)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---

@@ -85,6 +85,11 @@ class Settings:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8787
 
+    # --- Metrics (Prometheus exporter) ---
+    metrics_enabled: bool = False
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 9090
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -153,6 +158,11 @@ class Settings:
         if not (0 <= self.alert_min_score <= 1):
             errors.append("ALERT_MIN_SCORE must be in [0, 1]")
 
+        if self.metrics_enabled and not (0 < self.metrics_port < 65536):
+            errors.append("METRICS_PORT must be in (0, 65536) when enabled")
+        if self.metrics_enabled and self.metrics_port == self.dashboard_port:
+            errors.append("METRICS_PORT must differ from DASHBOARD_PORT")
+
         if errors:
             raise ValueError(
                 "Invalid configuration (" + str(len(errors)) + " problem(s)):\n  - "
@@ -199,6 +209,10 @@ def load_settings() -> Settings:
         in ("1", "true", "yes", "on"),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
+        metrics_enabled=_get_str("METRICS_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        metrics_host=_get_str("METRICS_HOST", "127.0.0.1"),
+        metrics_port=_get_int("METRICS_PORT", 9090),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),

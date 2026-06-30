@@ -53,6 +53,8 @@ drift-orderbook-watcher/
 │   │   └── flicker.py           # Order flicker (rapid appear/disappear)
 │   ├── alert/
 │   │   └── console_alert.py     # Alert output (console / JSON)
+│   ├── metrics/
+│   │   └── ...                  # Prometheus exporter (/metrics)
 │   └── watcher.py               # Main orchestrator
 ├── config/
 │   └── settings.py              # Configuration (from env)
@@ -120,6 +122,14 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Metrics (Prometheus)
+Set `METRICS_ENABLED=true` to expose live counters/gauges at
+`http://127.0.0.1:9090/metrics` (`METRICS_HOST`/`METRICS_PORT` to change it)
+for a Prometheus scrape job — snapshots polled, detections and detector
+errors by detector, alerts dispatched, and the current risk score per market.
+Runs in-process on its own thread; a bind failure (e.g. a busy port) just
+disables metrics, it never takes the watcher down.
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -180,10 +190,11 @@ Then register it in `watcher.py`. That's it.
 
 - [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
 - [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+- [x] Time-series storage (SQLite) and a charting dashboard
+- [x] Prometheus metrics exporter
+- [ ] Replay / backtesting against stored time-series
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
-- [ ] Prometheus metrics (modeled on the Drift-style exporter)
 
 ---
 

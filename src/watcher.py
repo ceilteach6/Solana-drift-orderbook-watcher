@@ -19,6 +19,7 @@ from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
+from src.metrics import MetricsRegistry, start_metrics_server
 from src.risk import RiskAggregator
 from src.selftest import run_selftest
 from src.storage import SQLiteStore
@@ -33,6 +34,8 @@ class Watcher:
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
+        self.metrics = MetricsRegistry() if settings.metrics_enabled else None
+        self._metrics_server = None
         self.feed = None
         self._last_healthcheck: float = 0.0
 
@@ -67,6 +70,19 @@ class Watcher:
                     self.settings.db_path,
                 )
                 self.store = None
+        if self.metrics is not None:
+            try:
+                self._metrics_server = start_metrics_server(
+                    self.metrics, self.settings.metrics_host, self.settings.metrics_port
+                )
+            except OSError:
+                # e.g. the port is already in use — metrics are observability,
+                # not core function, so degrade instead of taking the watcher down.
+                logger.exception(
+                    "Metrics exporter bind failed (%s:%d) — continuing without it.",
+                    self.settings.metrics_host, self.settings.metrics_port,
+                )
+                self.metrics = None
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
@@ -74,6 +90,9 @@ class Watcher:
             await self.feed.close()
             if self.store is not None:
                 self.store.close()
+            if self._metrics_server is not None:
+                self._metrics_server.shutdown()
+                self._metrics_server.server_close()
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000
@@ -100,10 +119,20 @@ class Watcher:
             return
         self._last_healthcheck = now
 
-        results = run_selftest(self.settings)
+        try:
+            results = run_selftest(self.settings)
+        except Exception:
+            # The self-test runs known-positive synthetic ticks through the
+            # *real* detector stack — a latent bug there must not be able to
+            # kill the watcher itself (same "one bad subsystem" pattern as
+            # snapshot polling and detector errors above).
+            logger.exception("Health-check self-test raised — skipping this cycle.")
+            return
         failed = [r.name for r in results if not r.passed]
         if failed:
             logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
+            if self.metrics is not None:
+                self.metrics.inc("drift_watcher_healthcheck_failures_total")
             self.alert.emit([
                 Detection(
                     detector="healthcheck",
@@ -121,27 +150,54 @@ class Watcher:
             snapshot = await self.feed.get_snapshot(market)
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            if self.metrics is not None:
+                self.metrics.inc("drift_watcher_snapshot_errors_total", {"market": market})
             return
         if snapshot is None:
             return
+        if self.metrics is not None:
+            self.metrics.inc("drift_watcher_snapshots_total", {"market": market})
 
         history = self._history[market]
         detections = []
         for detector in self.detectors:
             try:
-                detections.extend(detector.analyze(snapshot, history))
+                found = detector.analyze(snapshot, history)
             except Exception:
                 logger.exception("Detector %s raised on %s", detector.name, market)
+                if self.metrics is not None:
+                    self.metrics.inc(
+                        "drift_watcher_detector_errors_total", {"detector": detector.name}
+                    )
+                continue
+            detections.extend(found)
+            if self.metrics is not None and found:
+                self.metrics.inc(
+                    "drift_watcher_detections_total",
+                    {"market": market, "detector": detector.name},
+                    value=len(found),
+                )
         history.append(snapshot)
 
         if self.aggregator is not None:
             # Consolidate into a single smoothed risk signal per market.
             risk = self.aggregator.update(market, snapshot.timestamp, detections)
+            if self.metrics is not None:
+                self.metrics.set(
+                    "drift_watcher_risk_score", {"market": market},
+                    value=self.aggregator.score(market),
+                )
             if risk is not None:
                 self.alert.emit([risk])
+                if self.metrics is not None:
+                    self.metrics.inc("drift_watcher_alerts_total", {"market": market})
         elif detections:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
+            if self.metrics is not None:
+                self.metrics.inc(
+                    "drift_watcher_alerts_total", {"market": market}, value=len(detections)
+                )
 
         if self.store is not None:
             # sqlite3 commits are blocking I/O (fsync); run off the event loop
@@ -180,4 +236,7 @@ class Watcher:
             snaps = " + snapshots" if self.settings.persist_snapshots else ""
             print(f"   Storage   : {self.settings.db_path} "
                   f"(detections + risk{snaps})")
+        if self.settings.metrics_enabled:
+            print(f"   Metrics   : http://{self.settings.metrics_host}:"
+                  f"{self.settings.metrics_port}/metrics")
         print("   Press Ctrl+C to stop.\n")
