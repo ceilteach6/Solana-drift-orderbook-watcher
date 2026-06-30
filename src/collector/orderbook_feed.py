@@ -124,6 +124,13 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
 
     bids = levels(getattr(l2, "bids", None) or [])
     asks = levels(getattr(l2, "asks", None) or [])
+    # driftpy does not guarantee level order. Every downstream consumer
+    # (OrderbookSnapshot.mid, the imbalance/top-N detectors, the SQLite
+    # best_bid/best_ask columns) relies on bids[0]/asks[0] being the best
+    # price, so that invariant has to be enforced right here, once, where the
+    # data enters the normalized model.
+    bids.sort(key=lambda lvl: lvl.price, reverse=True)
+    asks.sort(key=lambda lvl: lvl.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

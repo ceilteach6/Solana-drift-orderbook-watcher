@@ -26,10 +26,14 @@ logger = logging.getLogger(__name__)
 class DriftStack:
     """Owns the DriftClient + DLOB subscriber lifecycle."""
 
-    def __init__(self, drift_client, dlob_subscriber, connection) -> None:
+    def __init__(
+        self, drift_client, dlob_subscriber, connection, user_map=None, slot_subscriber=None
+    ) -> None:
         self._drift_client = drift_client
         self._dlob = dlob_subscriber
         self._connection = connection
+        self._user_map = user_map
+        self._slot_subscriber = slot_subscriber
 
     @classmethod
     async def build(cls, settings) -> "DriftStack":
@@ -82,14 +86,17 @@ class DriftStack:
         dlob_subscriber = DLOBSubscriber(config=dlob_config)
         await dlob_subscriber.subscribe()
 
-        return cls(drift_client, dlob_subscriber, connection)
+        return cls(drift_client, dlob_subscriber, connection, user_map, slot_subscriber)
 
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
         return self._dlob.get_l2_orderbook_sync(market, depth=depth)
 
     async def close(self) -> None:
-        for obj in (self._dlob, self._drift_client):
+        # Every subscriber started in build() (dlob, drift_client, user_map,
+        # slot_subscriber) must be torn down here, or the websocket
+        # connections it opened leak past watcher shutdown.
+        for obj in (self._dlob, self._drift_client, self._user_map, self._slot_subscriber):
             unsub = getattr(obj, "unsubscribe", None)
             if unsub is None:
                 continue

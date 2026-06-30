@@ -79,6 +79,20 @@ def _levels_to_json(levels) -> str:
     return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
 
 
+def _safe_json(value) -> str:
+    """``json.dumps`` that degrades instead of raising.
+
+    ``details`` dicts come from the detector layer, including any detector a
+    user registers themselves (see the comment in ``src/watcher.py``). One
+    non-serializable value (a Decimal, a pubkey object, ...) must not abort
+    persistence for every other detection in the same batch.
+    """
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return json.dumps(str(value))
+
+
 class SQLiteStore(Store):
     def __init__(self, db_path: str = "data/watcher.db") -> None:
         self.db_path = db_path
@@ -120,7 +134,7 @@ class SQLiteStore(Store):
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
         rows = [
-            (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
+            (d.market, ts, d.detector, d.score, d.message, _safe_json(d.details))
             for d in detections
         ]
         if not rows:

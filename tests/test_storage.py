@@ -100,6 +100,18 @@ def test_summary_runs(tmp_path):
     store.close()
 
 
+def test_record_detections_tolerates_non_json_serializable_details(tmp_path):
+    """A bad ``details`` value must not drop the whole batch (see _safe_json)."""
+    store = make_store(tmp_path)
+    bad = det("layering", 0.8)
+    bad.details = {"wall": object()}  # not JSON-serializable
+    store.record_detections(1.0, [det("imbalance", 0.9), bad])
+    assert store.counts()["detections"] == 2
+    recent = {r["detector"]: r for r in store.recent_detections(10)}
+    assert "layering" in recent
+    store.close()
+
+
 def test_persistence_across_reopen(tmp_path):
     path = str(tmp_path / "persist.db")
     store = SQLiteStore(path)

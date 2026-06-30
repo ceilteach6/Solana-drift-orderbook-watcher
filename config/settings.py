@@ -48,7 +48,7 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    markets: tuple[str, ...] = field(default_factory=tuple)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
 
@@ -96,17 +96,105 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        errors = self._validate()
+        if errors:
+            raise ValueError(
+                "Invalid configuration (" + str(len(errors)) + " problem(s)):\n  - "
+                + "\n  - ".join(errors)
+            )
+
+    def _validate(self) -> list[str]:
+        """Collect (not raise on the first) every configuration problem.
+
+        Catching these at startup turns a misconfigured threshold into a
+        clear, immediate error instead of a runtime crash (or silent
+        misbehaviour) buried several ticks into a live run — e.g.
+        ``spoof_min_price_move=0`` would otherwise divide by zero inside the
+        spoof-pull detector on every single tick.
+        """
+        errors: list[str] = []
+
+        def positive(name: str, value: float) -> None:
+            if not value > 0:
+                errors.append(f"{name} must be > 0 (got {value!r})")
+
+        def non_negative(name: str, value: float) -> None:
+            if value < 0:
+                errors.append(f"{name} must be >= 0 (got {value!r})")
+
+        def unit_interval(name: str, value: float, *, low_inclusive=True, high_inclusive=True) -> None:
+            lo_ok = value >= 0 if low_inclusive else value > 0
+            hi_ok = value <= 1 if high_inclusive else value < 1
+            if not (lo_ok and hi_ok):
+                errors.append(f"{name} must be within [0, 1] (got {value!r})")
+
+        if not self.markets or any(not m for m in self.markets):
+            errors.append("markets must be a non-empty list of non-empty market names")
+
+        if self.orderbook_depth < 1:
+            errors.append(f"orderbook_depth must be >= 1 (got {self.orderbook_depth!r})")
+        if self.update_frequency_ms < 1:
+            errors.append(f"update_frequency_ms must be >= 1 (got {self.update_frequency_ms!r})")
+
+        if self.repeated_min_count < 2:
+            errors.append(f"repeated_min_count must be >= 2 (got {self.repeated_min_count!r})")
+        non_negative("repeated_size_tolerance", self.repeated_size_tolerance)
+
+        if self.layering_min_levels < 2:
+            errors.append(f"layering_min_levels must be >= 2 (got {self.layering_min_levels!r})")
+
+        positive("flicker_window_sec", self.flicker_window_sec)
+        if self.flicker_min_events < 1:
+            errors.append(f"flicker_min_events must be >= 1 (got {self.flicker_min_events!r})")
+
+        unit_interval("imbalance_min_ratio", self.imbalance_min_ratio, low_inclusive=False)
+        if self.imbalance_min_levels < 1:
+            errors.append(f"imbalance_min_levels must be >= 1 (got {self.imbalance_min_levels!r})")
+
+        positive("spoof_window_sec", self.spoof_window_sec)
+        positive("spoof_wall_ratio", self.spoof_wall_ratio)
+        # Divided into directly in SpoofPullDetector.analyze() — zero/negative
+        # would raise ZeroDivisionError (or invert the comparison) every tick.
+        positive("spoof_min_price_move", self.spoof_min_price_move)
+        unit_interval("spoof_pull_fraction", self.spoof_pull_fraction)
+
+        unit_interval("risk_smoothing", self.risk_smoothing, low_inclusive=False)
+        unit_interval("risk_alert_threshold", self.risk_alert_threshold, low_inclusive=False)
+        unit_interval("risk_clear_threshold", self.risk_clear_threshold)
+        if self.risk_clear_threshold >= self.risk_alert_threshold:
+            errors.append(
+                "risk_clear_threshold must be < risk_alert_threshold "
+                f"(got clear={self.risk_clear_threshold!r}, alert={self.risk_alert_threshold!r}) "
+                "— otherwise the hysteresis gate never clears an alert"
+            )
+        non_negative("risk_alert_cooldown_sec", self.risk_alert_cooldown_sec)
+
+        if self.healthcheck_enabled:
+            positive("healthcheck_interval_sec", self.healthcheck_interval_sec)
+
+        if not (1 <= self.dashboard_port <= 65535):
+            errors.append(f"dashboard_port must be between 1 and 65535 (got {self.dashboard_port!r})")
+
+        unit_interval("alert_min_score", self.alert_min_score)
+        if self.alert_format not in ("console", "json"):
+            errors.append(f"alert_format must be 'console' or 'json' (got {self.alert_format!r})")
+
+        non_negative("run_duration_sec", self.run_duration_sec)
+
+        return errors
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    markets = tuple(m.strip() for m in markets_raw.split(",") if m.strip())
 
     return Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=markets or ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
