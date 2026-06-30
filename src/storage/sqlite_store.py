@@ -71,6 +71,9 @@ class Store:
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         raise NotImplementedError
 
+    def commit(self) -> None:
+        raise NotImplementedError
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -89,7 +92,13 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: the watcher calls into this connection via
+        # asyncio.to_thread() (a worker thread, not the thread that opened
+        # it). Safe because all writes from one Watcher are still strictly
+        # serialized — each tick awaits its persist call before the next
+        # begins — and the dashboard never shares a connection across
+        # threads (each request opens/closes its own).
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -97,6 +106,10 @@ class SQLiteStore(Store):
         self._conn.commit()
 
     # ------------------------------------------------------------------ #
+    # Writes are NOT auto-committed per call — callers that record several
+    # rows for one tick (see Watcher._persist) should call commit() once at
+    # the end, so one logical update is one disk fsync/transaction instead
+    # of up to three.
     def record_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
@@ -115,7 +128,6 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
 
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
@@ -130,13 +142,14 @@ class SQLiteStore(Store):
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
 
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         self._conn.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
+
+    def commit(self) -> None:
         self._conn.commit()
 
     # ------------------------------------------------------------------ #

@@ -96,13 +96,52 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    # --- Feed resilience ---
+    # Max time to wait for one snapshot before treating the tick as failed.
+    snapshot_timeout_sec: float = 10.0
+    # Bounded retries (with backoff) for the initial live-feed connection
+    # before falling back to the synthetic feed.
+    feed_connect_retries: int = 3
+
+
+def _validate(s: "Settings") -> None:
+    """Fail fast on config that would otherwise misbehave silently at runtime."""
+    errors: list[str] = []
+
+    if not s.markets:
+        errors.append("MARKETS must list at least one market")
+    if s.update_frequency_ms <= 0:
+        errors.append("UPDATE_FREQUENCY_MS must be > 0 (0 busy-loops the feed)")
+    if s.orderbook_depth <= 0:
+        errors.append("ORDERBOOK_DEPTH must be > 0")
+    if s.snapshot_timeout_sec <= 0:
+        errors.append("SNAPSHOT_TIMEOUT_SEC must be > 0")
+    if s.feed_connect_retries < 1:
+        errors.append("FEED_CONNECT_RETRIES must be >= 1")
+    if not 0.0 <= s.risk_smoothing <= 1.0:
+        errors.append("RISK_SMOOTHING must be between 0 and 1")
+    if s.risk_clear_threshold >= s.risk_alert_threshold:
+        errors.append(
+            "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+            "(otherwise the hysteresis gate never stays open)"
+        )
+    if not 0.0 <= s.imbalance_min_ratio <= 1.0:
+        errors.append("IMBALANCE_MIN_RATIO must be between 0 and 1")
+    if s.alert_format not in ("console", "json"):
+        errors.append("ALERT_FORMAT must be 'console' or 'json'")
+
+    if errors:
+        raise ValueError(
+            "Invalid configuration (.env):\n  - " + "\n  - ".join(errors)
+        )
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    result = Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
@@ -142,7 +181,11 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
+        snapshot_timeout_sec=_get_float("SNAPSHOT_TIMEOUT_SEC", 10.0),
+        feed_connect_retries=_get_int("FEED_CONNECT_RETRIES", 3),
     )
+    _validate(result)
+    return result
 
 
 # Ready-to-use singleton.

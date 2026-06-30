@@ -33,6 +33,17 @@ class BaseDetector:
     def __init__(self, settings) -> None:
         self.settings = settings
 
+    @classmethod
+    def required_history_sec(cls, settings) -> float:
+        """Seconds of snapshot history this detector needs to see.
+
+        Override when ``analyze`` looks further back than the immediately
+        preceding snapshot, so :class:`~src.watcher.Watcher` can size its
+        rolling history buffer to cover every detector's lookback window
+        instead of silently truncating it for some of them.
+        """
+        return 0.0
+
     def analyze(self, snapshot, history) -> list[Detection]:
         """Inspect ``snapshot`` (and prior ``history``) for a pattern.
 

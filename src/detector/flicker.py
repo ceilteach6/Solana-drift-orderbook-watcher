@@ -20,6 +20,10 @@ _PRICE_DECIMALS = 4
 class FlickerDetector(BaseDetector):
     name = "flicker"
 
+    @classmethod
+    def required_history_sec(cls, settings) -> float:
+        return settings.flicker_window_sec
+
     def analyze(self, snapshot, history) -> list[Detection]:
         window = self.settings.flicker_window_sec
         now = snapshot.timestamp

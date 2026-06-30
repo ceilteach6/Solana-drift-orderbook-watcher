@@ -19,6 +19,7 @@ synthetic one if ``driftpy`` is unavailable or the connection fails, so
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
@@ -60,6 +61,11 @@ class OrderbookSnapshot:
 class OrderbookFeed:
     """Abstract async feed: connect, pull snapshots, close."""
 
+    #: True for feeds that fabricate data instead of reading the live DLOB
+    #: (see :class:`SyntheticOrderbookFeed`). Lets callers surface "demo mode"
+    #: prominently instead of silently treating fake alerts as real ones.
+    is_demo: bool = False
+
     async def connect(self) -> None:  # pragma: no cover - trivial
         return None
 
@@ -90,7 +96,13 @@ class DriftOrderbookFeed(OrderbookFeed):
     async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
         if self._stack is None:
             raise RuntimeError("connect() must be called before get_snapshot()")
-        raw = self._stack.get_l2(market, depth=self.settings.orderbook_depth)
+        # get_l2() is a synchronous, potentially slow driftpy call (DLOB
+        # recomputation). Running it inline on the event loop would stall
+        # every other coroutine (other markets, the periodic health-check)
+        # for as long as it takes — push it to a worker thread instead.
+        raw = await asyncio.to_thread(
+            self._stack.get_l2, market, depth=self.settings.orderbook_depth
+        )
         if raw is None:
             return None
         return _snapshot_from_driftpy(market, raw)
@@ -138,6 +150,8 @@ class SyntheticOrderbookFeed(OrderbookFeed):
     probability it injects a repeated-size "wall" so the repeated-size and
     layering detectors fire too.
     """
+
+    is_demo = True
 
     _SEED_MIDS = {"SOL-PERP": 150.0, "BTC-PERP": 65000.0, "ETH-PERP": 3400.0}
 
@@ -198,15 +212,34 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 async def create_feed(settings) -> OrderbookFeed:
     """Return a connected feed, preferring the real Drift feed.
 
-    Falls back to the synthetic feed (with a clear warning) when driftpy is
-    missing or the connection cannot be established.
+    A single transient hiccup (DNS blip, slow websocket handshake, rate
+    limit) must not permanently strand the watcher on fabricated data, so the
+    live connection is retried with exponential backoff before giving up.
+    Only falls back to the synthetic feed (with a loud, repeated warning)
+    when driftpy is missing or every retry has been exhausted.
     """
-    try:
-        feed: OrderbookFeed = DriftOrderbookFeed(settings)
-        await feed.connect()
-        return feed
-    except Exception as exc:  # ImportError, connection errors, etc.
-        logger.warning("Real Drift feed unavailable (%s); falling back.", exc)
-        synthetic = SyntheticOrderbookFeed(settings)
-        await synthetic.connect()
-        return synthetic
+    attempts = max(1, int(getattr(settings, "feed_connect_retries", 3)))
+    backoff = 1.0
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            feed: OrderbookFeed = DriftOrderbookFeed(settings)
+            await feed.connect()
+            return feed
+        except Exception as exc:  # ImportError, connection errors, etc.
+            last_exc = exc
+            logger.warning(
+                "Drift feed connect attempt %d/%d failed: %s", attempt, attempts, exc
+            )
+            if attempt < attempts:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+
+    logger.warning(
+        "Real Drift feed unavailable after %d attempt(s) (%s); "
+        "falling back to the SYNTHETIC feed.",
+        attempts, last_exc,
+    )
+    synthetic = SyntheticOrderbookFeed(settings)
+    await synthetic.connect()
+    return synthetic

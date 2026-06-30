@@ -100,6 +100,27 @@ def test_summary_runs(tmp_path):
     store.close()
 
 
+def test_writes_are_not_committed_until_commit_is_called(tmp_path):
+    """One tick can write to multiple tables; commit() should make them all
+    durable in a single transaction instead of each call fsyncing on its own."""
+    import sqlite3
+
+    path = str(tmp_path / "txn.db")
+    store = SQLiteStore(path)
+    store.connect()
+
+    store.record_risk("SOL-PERP", 1.0, 0.5)
+    other = sqlite3.connect(path)
+    try:
+        assert other.execute("SELECT COUNT(*) FROM risk").fetchone()[0] == 0
+
+        store.commit()
+        assert other.execute("SELECT COUNT(*) FROM risk").fetchone()[0] == 1
+    finally:
+        other.close()
+        store.close()
+
+
 def test_persistence_across_reopen(tmp_path):
     path = str(tmp_path / "persist.db")
     store = SQLiteStore(path)

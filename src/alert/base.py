@@ -27,6 +27,15 @@ class Alert:
         """Deliver one (already score-filtered) detection."""
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Release any resources (threads, connections) held by this sink.
+
+        No-op by default; override when a sink owns something that must be
+        torn down explicitly (e.g. a thread pool) instead of relying on
+        interpreter-exit cleanup, which can stall shutdown.
+        """
+        return None
+
 
 class AlertDispatcher:
     """Filters detections by score and delivers them to all sinks."""
@@ -48,3 +57,10 @@ class AlertDispatcher:
                     logger.exception("Alert sink %s failed", sink.name)
             emitted += 1
         return emitted
+
+    def close(self) -> None:
+        for sink in self.sinks:
+            try:
+                sink.close()
+            except Exception:
+                logger.exception("Alert sink %s failed to close", sink.name)

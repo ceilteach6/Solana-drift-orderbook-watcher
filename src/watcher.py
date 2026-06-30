@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 
 
 class Watcher:
+    # Consecutive snapshot failures (errors or timeouts) before the watcher
+    # treats the feed as unhealthy: alerts once and forces a reconnect.
+    _FEED_FAILURE_THRESHOLD = 5
+    # Minimum gap between repeated "feed unhealthy" alerts, so a feed stuck
+    # in a fail/reconnect/fail loop doesn't spam every tick.
+    _FEED_ALERT_COOLDOWN_SEC = 60.0
+    # While running on the synthetic (demo) feed, how often to retry the
+    # real Drift connection in the background.
+    _DEMO_RETRY_SEC = 300.0
+
     def __init__(self, settings) -> None:
         self.settings = settings
         self.detectors = self._build_detectors(settings)
@@ -35,10 +45,26 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._consecutive_feed_failures = 0
+        self._last_feed_alert: float = float("-inf")
+        self._last_demo_retry: float = 0.0
+        # Guards _reconnect_feed against overlapping calls (a failure-triggered
+        # reconnect and the periodic demo-mode retry could otherwise both be
+        # in flight at once, each replacing self.feed and leaking the loser).
+        self._reconnect_lock = asyncio.Lock()
+        # The most recent off-loop storage write, so shutdown can wait for it
+        # instead of racing store.close() against a write still in progress.
+        self._pending_persist: asyncio.Task | None = None
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover every detector's lookback
+        # window (e.g. spoof_pull can need more than flicker) — derived from
+        # the detectors themselves so a new windowed detector can't silently
+        # under-size this buffer again.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        lookback_sec = max(
+            (d.required_history_sec(settings) for d in self.detectors), default=0.0
+        )
+        history_len = max(8, int(lookback_sec / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }
@@ -54,13 +80,25 @@ class Watcher:
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
             datefmt="%H:%M:%S",
         )
-        self._banner()
         if self.store is not None:
             self.store.connect()
         self.feed = await create_feed(self.settings)
+        self._banner()  # printed after connecting so demo mode is visible
         try:
             await self._run_loop()
         finally:
+            # A storage write dispatched via asyncio.to_thread() can still be
+            # running on a worker thread when shutdown begins (e.g. Ctrl+C
+            # mid-tick). Wait for it (shielded from the cancellation that's
+            # already propagating) before closing the connection underneath
+            # it, so store.close() can never run concurrently with a write.
+            pending = self._pending_persist
+            if pending is not None and not pending.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(pending), timeout=5.0)
+                except Exception:
+                    logger.warning("Pending storage write did not finish before shutdown")
+            self.alert.close()
             await self.feed.close()
             if self.store is not None:
                 self.store.close()
@@ -70,12 +108,14 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._last_demo_retry = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
             self._maybe_healthcheck()
+            await self._maybe_recover_from_demo()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
@@ -108,10 +148,22 @@ class Watcher:
 
     async def _tick(self, market: str) -> None:
         try:
-            snapshot = await self.feed.get_snapshot(market)
+            snapshot = await asyncio.wait_for(
+                self.feed.get_snapshot(market),
+                timeout=self.settings.snapshot_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Snapshot timed out for %s (> %.1fs)",
+                market, self.settings.snapshot_timeout_sec,
+            )
+            await self._note_feed_failure(market, "timeout")
+            return
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            await self._note_feed_failure(market, str(exc))
             return
+        self._consecutive_feed_failures = 0
         if snapshot is None:
             return
 
@@ -133,7 +185,90 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        # SQLite commits do blocking disk I/O; keep them off the event loop
+        # so a slow/contended disk can't stall orderbook polling. Tracked on
+        # self._pending_persist so shutdown can wait for it instead of
+        # closing the connection out from under a write in progress.
+        task = asyncio.ensure_future(
+            asyncio.to_thread(self._persist, market, snapshot, detections)
+        )
+        self._pending_persist = task
+        try:
+            await task
+        finally:
+            if self._pending_persist is task:
+                self._pending_persist = None
+
+    async def _note_feed_failure(self, market: str, reason: str) -> None:
+        """Track consecutive snapshot failures and force a reconnect once
+        the feed looks unhealthy, instead of logging warnings forever while
+        quietly never recovering."""
+        self._consecutive_feed_failures += 1
+        if self._consecutive_feed_failures < self._FEED_FAILURE_THRESHOLD:
+            return
+
+        now = time.monotonic()
+        if now - self._last_feed_alert >= self._FEED_ALERT_COOLDOWN_SEC:
+            self._last_feed_alert = now
+            logger.error(
+                "Feed unhealthy: %d consecutive failures (last: %s on %s) — reconnecting",
+                self._consecutive_feed_failures, reason, market,
+            )
+            self.alert.emit([
+                Detection(
+                    detector="feed_health",
+                    market="-",
+                    score=1.0,
+                    message=(
+                        f"Orderbook feed unhealthy "
+                        f"({self._consecutive_feed_failures} consecutive failures) "
+                        f"— attempting reconnect"
+                    ),
+                    details={
+                        "consecutive_failures": self._consecutive_feed_failures,
+                        "last_error": reason,
+                    },
+                )
+            ])
+        await self._reconnect_feed()
+
+    async def _reconnect_feed(self) -> None:
+        # Both a failure-triggered reconnect and the periodic demo-mode
+        # retry call this; serialize them so two overlapping create_feed()
+        # calls can never both replace self.feed, leaking whichever one loses.
+        async with self._reconnect_lock:
+            old_feed = self.feed
+            try:
+                new_feed = await create_feed(self.settings)
+            except Exception:
+                # self.feed is intentionally left untouched here: if it were
+                # closed unconditionally (e.g. in a finally block) while the
+                # reassignment above never happened, every later tick would
+                # call get_snapshot() on a dead feed forever.
+                logger.exception("Feed reconnect attempt failed; will retry")
+                return
+
+            self.feed = new_feed
+            try:
+                await old_feed.close()
+            except Exception:
+                logger.debug("Error closing previous feed", exc_info=True)
+            self._consecutive_feed_failures = 0
+            logger.info("Feed reconnected (demo=%s).", self.feed.is_demo)
+
+    async def _maybe_recover_from_demo(self) -> None:
+        """While stuck on the synthetic feed, periodically retry the real
+        Drift connection in the background — the synthetic feed never
+        raises, so without this the watcher would otherwise stay in demo
+        mode forever once degraded, even after the outage clears."""
+        if not getattr(self.feed, "is_demo", False):
+            return
+        now = time.monotonic()
+        if now - self._last_demo_retry < self._DEMO_RETRY_SEC:
+            return
+        self._last_demo_retry = now
+        logger.warning("Still in DEMO mode (synthetic feed) — retrying live Drift connection...")
+        await self._reconnect_feed()
 
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
@@ -147,11 +282,16 @@ class Watcher:
                     market, snapshot.timestamp,
                     self.aggregator.score(market), snapshot.mid,
                 )
+            self.store.commit()
         except Exception:
             logger.exception("Storage write failed for %s", market)
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
+        if getattr(self.feed, "is_demo", False):
+            print("   ⚠️  DEMO MODE — synthetic data, NOT the live Drift book.")
+            print("      Retrying the real connection in the background "
+                  f"every {self._DEMO_RETRY_SEC:.0f}s.")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         mode = "risk-aggregated" if self.aggregator else "raw per-detection"

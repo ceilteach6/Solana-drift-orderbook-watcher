@@ -46,7 +46,28 @@ kész; csak az értékeket kell beírnod.
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Push a távoli branchre | ✅ kész |
+
+### 2.1 🔧 Robusztusság-átvilágítás (2026-06-30)
+
+Teljes kódbázis-audit + strukturális javítások (nem patch-szintű) a futásidejű
+crash- és csendes-hiba kockázatokra:
+
+| Probléma | Javítás |
+|---|---|
+| `get_l2_orderbook_sync` szinkron hívás blokkolta az event loopot | `asyncio.to_thread()`-be tolva |
+| Egy lefagyott snapshot örökre megállíthatta a watchert | `SNAPSHOT_TIMEOUT_SEC` + `asyncio.wait_for` |
+| Átmeneti kapcsolati hiba véglegesen szintetikus (demo) módba húzott | `FEED_CONNECT_RETRIES` (exponenciális backoff) az induló kapcsolatra |
+| Élő feed lefagyása után nincs újracsatlakozás, örökre csendben hal el | konzekutív hiba számláló → automatikus reconnect + riasztás; demo módból periodikus visszapróbálkozás |
+| Webhook riasztás korlátlan szálat indított terhelés alatt | `ThreadPoolExecutor` (4 worker) helyette |
+| `_history` deque mérete csak a flicker-ablakot vette figyelembe, a spoof-ablakot csendben levágta | minden detektor saját `required_history_sec()`-ja alapján méreteződik |
+| 3 külön SQLite commit / tick blokkolva az event loopon | egy tranzakció / tick, `asyncio.to_thread()`-ben |
+| `DriftStack.build()` részleges hiba esetén szivárogtatta az RPC kapcsolatot | teardown minden lépés hibájánál |
+| Hibás `.env` (pl. `RISK_CLEAR_THRESHOLD >= RISK_ALERT_THRESHOLD`) csendben rosszul viselkedett | `load_settings()` induláskor `ValueError`-t dob |
+
+15 új regressziós teszt (`tests/test_settings.py`, `tests/test_feed_resilience.py`,
+`tests/test_alerts.py` + bővített `tests/test_storage.py`); mind a 46 teszt és a
+`--selftest` (6/6) zöld.
 
 ---
 
