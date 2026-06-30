@@ -89,7 +89,9 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # timeout: wait (rather than immediately raising "database is locked")
+        # when the watcher and dashboard hit the file concurrently.
+        self._conn = sqlite3.connect(self.db_path, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")

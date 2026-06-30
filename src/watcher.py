@@ -35,6 +35,7 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._consecutive_failures: int = 0
 
         # Keep enough history per market to cover the flicker window.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
@@ -90,7 +91,11 @@ class Watcher:
             return
         self._last_healthcheck = now
 
-        results = run_selftest(self.settings)
+        try:
+            results = run_selftest(self.settings)
+        except Exception:  # a broken self-test must not take the watcher down
+            logger.exception("Health-check self-test raised")
+            return
         failed = [r.name for r in results if not r.passed]
         if failed:
             logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
@@ -108,10 +113,14 @@ class Watcher:
 
     async def _tick(self, market: str) -> None:
         try:
-            snapshot = await self.feed.get_snapshot(market)
-        except Exception as exc:  # one bad poll shouldn't kill the watcher
+            snapshot = await asyncio.wait_for(
+                self.feed.get_snapshot(market), timeout=self.settings.snapshot_timeout_sec
+            )
+        except Exception as exc:  # one bad/hung poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            await self._on_snapshot_failure()
             return
+        self._consecutive_failures = 0
         if snapshot is None:
             return
 
@@ -134,6 +143,35 @@ class Watcher:
             self.alert.emit(detections)
 
         self._persist(market, snapshot, detections)
+
+    async def _on_snapshot_failure(self) -> None:
+        """Track repeated feed failures and reconnect once they pile up.
+
+        A single bad poll is normal (transient RPC hiccup) and is just logged
+        by the caller. But the feed never recovers on its own after a
+        websocket/RPC drop, so without this the watcher quietly degrades to
+        zero coverage forever while still looking "alive". Reconnecting after
+        a run of failures gives it a chance to self-heal.
+        """
+        self._consecutive_failures += 1
+        threshold = self.settings.feed_reconnect_after_failures
+        if threshold <= 0 or self._consecutive_failures < threshold:
+            return
+
+        logger.warning(
+            "%d consecutive snapshot failures — reconnecting feed.",
+            self._consecutive_failures,
+        )
+        self._consecutive_failures = 0  # always reset: don't reconnect every tick
+        try:
+            await self.feed.close()
+        except Exception:
+            logger.exception("Error closing feed before reconnect")
+        try:
+            self.feed = await create_feed(self.settings)
+            logger.info("Feed reconnected.")
+        except Exception:
+            logger.exception("Feed reconnect failed; will retry after %d more failures", threshold)
 
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:

@@ -57,22 +57,28 @@ def _make_handler(db_path: str):
             self.end_headers()
             self.wfile.write(body)
 
+        _MAX_LIMIT = 5000
+
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
+
+            if route in ("/", "/index.html"):
+                return self._send_html()
+
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
             try:
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            # Clamp so a crafted/huge value can't force a full-table scan.
+            limit = max(1, min(limit, self._MAX_LIMIT))
 
-            if route in ("/", "/index.html"):
-                return self._send_html()
-
-            # Each request opens its own short-lived read connection.
-            store = SQLiteStore(db_path)
+            store = None
             try:
+                # Each request opens its own short-lived read connection.
+                store = SQLiteStore(db_path)
                 store.connect()
                 if route == "/api/markets":
                     return self._send_json(store.markets())
@@ -88,11 +94,13 @@ def _make_handler(db_path: str):
                         return self._send_json({"error": "market required"}, 400)
                     return self._send_json(store.detection_markers(market, limit))
                 return self._send_json({"error": "not found"}, 404)
-            except Exception as exc:
+            except Exception:
+                # Don't leak internal details (paths, SQL errors) to the client.
                 logger.exception("dashboard request failed")
-                return self._send_json({"error": str(exc)}, 500)
+                return self._send_json({"error": "internal error"}, 500)
             finally:
-                store.close()
+                if store is not None:
+                    store.close()
 
     return Handler
 

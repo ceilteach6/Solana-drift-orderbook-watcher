@@ -23,14 +23,32 @@ except Exception:  # pragma: no cover - dotenv is optional at runtime
     pass
 
 
+class ConfigError(ValueError):
+    """A required/optional env var holds a value of the wrong type."""
+
+
 def _get_int(name: str, default: int) -> int:
     raw = os.getenv(name)
-    return int(raw) if raw not in (None, "") else default
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ConfigError(
+            f"Environment variable {name}={raw!r} is not a valid integer"
+        ) from None
 
 
 def _get_float(name: str, default: float) -> float:
     raw = os.getenv(name)
-    return float(raw) if raw not in (None, "") else default
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConfigError(
+            f"Environment variable {name}={raw!r} is not a valid number"
+        ) from None
 
 
 def _get_str(name: str, default: str) -> str:
@@ -51,6 +69,11 @@ class Settings:
     markets: list[str] = field(default_factory=list)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
+    # Abort a single snapshot fetch that hangs longer than this so one stuck
+    # market can't stall the whole polling loop.
+    snapshot_timeout_sec: float = 10.0
+    # Reconnect the feed after this many consecutive snapshot failures.
+    feed_reconnect_after_failures: int = 5
 
     # --- Detector thresholds ---
     repeated_min_count: int = 4
@@ -88,6 +111,9 @@ class Settings:
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
+    # Suppress repeat alerts for the same (market, detector) within this
+    # window — protects webhook/Telegram sinks from bursty raw detections.
+    alert_cooldown_sec: float = 5.0
     # Webhook credentials/links are the user's part (see docs/NOTES.md).
     alert_webhook_url: str = ""
     telegram_bot_token: str = ""
@@ -109,6 +135,8 @@ def load_settings() -> Settings:
         markets=markets or ["SOL-PERP"],
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
+        snapshot_timeout_sec=_get_float("SNAPSHOT_TIMEOUT_SEC", 10.0),
+        feed_reconnect_after_failures=_get_int("FEED_RECONNECT_AFTER_FAILURES", 5),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
         repeated_size_tolerance=_get_float("REPEATED_SIZE_TOLERANCE", 0.001),
         layering_min_levels=_get_int("LAYERING_MIN_LEVELS", 5),
@@ -138,6 +166,7 @@ def load_settings() -> Settings:
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
+        alert_cooldown_sec=_get_float("ALERT_COOLDOWN_SEC", 5.0),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),

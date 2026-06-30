@@ -100,15 +100,25 @@ class DriftOrderbookFeed(OrderbookFeed):
             await self._stack.close()
 
 
-def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
+def _to_float(value) -> float | None:
+    """driftpy L2 levels carry scaled integers; normalize to floats.
+
+    Returns ``None`` (rather than ``0.0``) when ``value`` can't be coerced,
+    so the caller can drop the level instead of feeding a fabricated 0.0
+    price/size into the detectors and mid-price calculation.
+    """
     # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
     # helpers usually expose ``price`` / ``size`` attributes already; we coerce
     # defensively so version differences don't crash the watcher.
     try:
         return float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        pass
+    raw = getattr(value, "value", None)
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
@@ -119,7 +129,14 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            p, s = _to_float(price), _to_float(size)
+            if p is None or s is None:
+                logger.warning(
+                    "Skipping malformed L2 level for %s: price=%r size=%r",
+                    market, price, size,
+                )
+                continue
+            out.append(Level(p, s))
         return out
 
     bids = levels(getattr(l2, "bids", None) or [])

@@ -11,6 +11,7 @@ registering it in :func:`src.alert.build_alert_sinks`.
 from __future__ import annotations
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +30,32 @@ class Alert:
 
 
 class AlertDispatcher:
-    """Filters detections by score and delivers them to all sinks."""
+    """Filters detections by score and delivers them to all sinks.
+
+    Also rate-limits repeats of the same (market, detector) within
+    ``ALERT_COOLDOWN_SEC`` so a detector that keeps firing every tick can't
+    flood the sinks (webhook/Telegram in particular — see
+    :class:`src.alert.webhook_alert.WebhookAlert`).
+    """
 
     def __init__(self, settings, sinks) -> None:
         self.settings = settings
         self.sinks = list(sinks)
+        self._last_emit: dict[tuple[str, str], float] = {}
 
     def emit(self, detections) -> int:
-        """Deliver qualifying detections. Returns how many were emitted."""
+        """Deliver qualifying, non-cooled-down detections. Returns how many were emitted."""
         emitted = 0
+        now = time.monotonic()
+        cooldown = self.settings.alert_cooldown_sec
         for d in detections:
             if d.score < self.settings.alert_min_score:
                 continue
+            key = (d.market, d.detector)
+            last = self._last_emit.get(key)
+            if cooldown > 0 and last is not None and (now - last) < cooldown:
+                continue
+            self._last_emit[key] = now
             for sink in self.sinks:
                 try:
                     sink.deliver(d)

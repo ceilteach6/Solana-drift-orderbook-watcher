@@ -46,7 +46,51 @@ kész; csak az értékeket kell beírnod.
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
+| **Robusztussági audit + javítás** (2026-06-30) — lásd lent | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+
+### Robusztussági audit (2026-06-30)
+
+Teljes kód-átvizsgálás crash-kockázat és csendes hibák szempontjából (nem a
+detektor-algoritmusok — azokat a tesztek + `--selftest` már lefedik —, hanem a
+kötés/hibakezelés réteg). 18 találat, mind javítva, ad-hoc patch helyett
+strukturális megoldással:
+
+- **Konfiguráció**: hibás env-érték (`SPOOF_WALL_RATIO=5x` stb.) most pontos,
+  névvel ellátott `ConfigError`-t dob és `main.py` szépen `exit 1`-gyel áll
+  le — nem nyers `ValueError` trace.
+- **Feed-reconnect**: `watcher.py` mostantól számolja az egymást követő
+  snapshot-hibákat, és `FEED_RECONNECT_AFTER_FAILURES` (alap: 5) után
+  újracsatlakozik — korábban egy websocket-drop után a watcher örökre
+  "él, de vakon" futott tovább.
+- **Snapshot timeout**: egy beragadt RPC-hívás (`SNAPSHOT_TIMEOUT_SEC`, alap
+  10s) most nem akaszthatja meg az egész poll-loopot.
+- **Health-check önteszt** mostantól try/except alatt fut a watcher
+  loopban — korábban egy jövőbeli detektor-hiba a health-check-en keresztül
+  vitte volna le az egész processzt.
+- **`main.py`**: argparse (elgépelt flag → hibaüzenet, nem csendes
+  watcher-indítás), nem-0 exit code hiba esetén, SIGTERM most graceful
+  leállást vált ki (Docker/K8s-kompatibilis), `--dbstats` try/finally alatt.
+- **`drift_client.py`**: a 4 lépéses websocket-subscribe lánc most
+  try/except alatt fut — félbeszakadt build esetén minden már megnyitott
+  socket bezárul (korábban szivárgott); `user_map`/`slot_subscriber` is
+  bekerült a teardownba (korábban azok sosem zárultak, még tiszta leállásnál
+  sem).
+- **Alert-dispatcher**: új `ALERT_COOLDOWN_SEC` (alap 5s) per
+  (market, detector) — véd a webhook/Telegram-spam ellen raw módban (a
+  risk-aggregátornak már volt sajátja, a nyers detekcióknak nem).
+- **Dashboard**: `limit` query-param most clamp-elve (max 5000, korábban
+  korlátlan — DoS-vektor), nyers exception-szöveg helyett generikus
+  hibaüzenet a kliensnek, `SQLiteStore` konstruktor a try-n belülre került.
+- **SQLite**: `busy_timeout` (10s) hozzáadva — watcher + dashboard
+  egyidejű hozzáférésnél most vár, nem azonnal "database is locked".
+- **`orderbook_feed.py`**: hibás/`None` ár-szint most kimarad (logolva), nem
+  csendesen `0.0`-ra konvertálódik a könyvbe (ami torzította volna a
+  mid-price-t és a detektorokat).
+
+19 új regressziós teszt (`tests/test_alert.py`, `test_settings.py`,
+`test_orderbook_feed.py`, `test_watcher.py`); mind a régi, mind az új
+tesztek (50/50) és a `--selftest` (6/6) zöldek.
 
 ---
 

@@ -24,12 +24,21 @@ logger = logging.getLogger(__name__)
 
 
 class DriftStack:
-    """Owns the DriftClient + DLOB subscriber lifecycle."""
+    """Owns the DriftClient + DLOB subscriber lifecycle.
 
-    def __init__(self, drift_client, dlob_subscriber, connection) -> None:
+    ``_subscribed`` lists every component that was successfully subscribed,
+    in subscribe order, so :meth:`close` (and the partial-failure cleanup in
+    :meth:`build`) can unwind them all — not just the two passed to the
+    constructor. Without this, ``user_map`` and ``slot_subscriber`` keep
+    their websocket subscriptions open for the life of the process even
+    after a clean shutdown.
+    """
+
+    def __init__(self, drift_client, dlob_subscriber, connection, subscribed) -> None:
         self._drift_client = drift_client
         self._dlob = dlob_subscriber
         self._connection = connection
+        self._subscribed = subscribed
 
     @classmethod
     async def build(cls, settings) -> "DriftStack":
@@ -49,57 +58,76 @@ class DriftStack:
         from driftpy.slot.slot_subscriber import SlotSubscriber
 
         connection = AsyncClient(settings.rpc_url)
+        subscribed: list = []
 
-        # An ephemeral keypair is enough to *watch* — no funds, no signing.
-        if settings.keypair_path:
-            with open(settings.keypair_path) as fh:
-                import json
+        try:
+            # An ephemeral keypair is enough to *watch* — no funds, no signing.
+            if settings.keypair_path:
+                with open(settings.keypair_path) as fh:
+                    import json
 
-                kp = Keypair.from_bytes(bytes(json.load(fh)))
-        else:
-            kp = Keypair()
-        wallet = Wallet(kp)
+                    kp = Keypair.from_bytes(bytes(json.load(fh)))
+            else:
+                kp = Keypair()
+            wallet = Wallet(kp)
 
-        drift_client = DriftClient(
-            connection,
-            wallet,
-            settings.drift_env,
-            account_subscription=AccountSubscriptionConfig("websocket"),
-        )
-        await drift_client.subscribe()
+            drift_client = DriftClient(
+                connection,
+                wallet,
+                settings.drift_env,
+                account_subscription=AccountSubscriptionConfig("websocket"),
+            )
+            await drift_client.subscribe()
+            subscribed.append(drift_client)
 
-        user_map = UserMap(
-            UserMapConfig(drift_client, WebsocketConfig())
-        )
-        await user_map.subscribe()
+            user_map = UserMap(
+                UserMapConfig(drift_client, WebsocketConfig())
+            )
+            await user_map.subscribe()
+            subscribed.append(user_map)
 
-        slot_subscriber = SlotSubscriber(drift_client)
-        await slot_subscriber.subscribe()
+            slot_subscriber = SlotSubscriber(drift_client)
+            await slot_subscriber.subscribe()
+            subscribed.append(slot_subscriber)
 
-        dlob_config = DLOBClientConfig(
-            drift_client, user_map, slot_subscriber, settings.update_frequency_ms
-        )
-        dlob_subscriber = DLOBSubscriber(config=dlob_config)
-        await dlob_subscriber.subscribe()
+            dlob_config = DLOBClientConfig(
+                drift_client, user_map, slot_subscriber, settings.update_frequency_ms
+            )
+            dlob_subscriber = DLOBSubscriber(config=dlob_config)
+            await dlob_subscriber.subscribe()
+            subscribed.append(dlob_subscriber)
+        except Exception:
+            # Unwind whatever subscribed successfully before the failure, and
+            # the RPC connection, so a partial build doesn't leak sockets —
+            # the caller (create_feed) falls back to the synthetic feed and
+            # never gets a handle to close this itself.
+            await _teardown(subscribed, connection)
+            raise
 
-        return cls(drift_client, dlob_subscriber, connection)
+        return cls(drift_client, dlob_subscriber, connection, subscribed)
 
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
         return self._dlob.get_l2_orderbook_sync(market, depth=depth)
 
     async def close(self) -> None:
-        for obj in (self._dlob, self._drift_client):
-            unsub = getattr(obj, "unsubscribe", None)
-            if unsub is None:
-                continue
-            try:
-                result = unsub()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:  # pragma: no cover - best-effort teardown
-                logger.debug("Error during teardown of %r", obj, exc_info=True)
+        await _teardown(self._subscribed, self._connection)
+
+
+async def _teardown(subscribed: list, connection) -> None:
+    """Best-effort unsubscribe of every entry in ``subscribed`` (reverse
+    order), then close the RPC connection. Never raises."""
+    for obj in reversed(subscribed):
+        unsub = getattr(obj, "unsubscribe", None)
+        if unsub is None:
+            continue
         try:
-            await self._connection.close()
-        except Exception:  # pragma: no cover
-            logger.debug("Error closing RPC connection", exc_info=True)
+            result = unsub()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # pragma: no cover - best-effort teardown
+            logger.debug("Error during teardown of %r", obj, exc_info=True)
+    try:
+        await connection.close()
+    except Exception:  # pragma: no cover
+        logger.debug("Error closing RPC connection", exc_info=True)
