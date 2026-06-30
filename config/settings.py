@@ -47,7 +47,11 @@ class Settings:
     drift_env: str
     keypair_path: str
 
-    # --- Markets / feed ---
+    # --- Venue / feed ---
+    # Which on-chain orderbook to watch. "drift" (default) or "phoenix".
+    # Both are real on-chain CLOBs on Solana; the detector/risk/storage/
+    # dashboard layers are venue-agnostic (see docs/NOTES.md §4).
+    venue: str = "drift"
     markets: list[str] = field(default_factory=list)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
@@ -106,6 +110,7 @@ def load_settings() -> Settings:
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
+        venue=_get_str("VENUE", "drift").lower(),
         markets=markets or ["SOL-PERP"],
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),

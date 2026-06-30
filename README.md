@@ -45,7 +45,8 @@ drift-orderbook-watcher/
 ├── src/
 │   ├── collector/
 │   │   ├── drift_client.py      # DriftClient setup + connection
-│   │   └── orderbook_feed.py    # DLOB subscribe, L2 orderbook stream
+│   │   ├── phoenix_client.py    # Phoenix CLOB setup + connection (2nd venue)
+│   │   └── orderbook_feed.py    # Venue feeds (Drift, Phoenix, synthetic) → L2 stream
 │   ├── detector/
 │   │   ├── base.py              # Detector base class
 │   │   ├── repeated_size.py     # Repeated-size detector
@@ -89,6 +90,18 @@ pip install -r requirements.txt
 cp config.example.env .env
 # Edit .env: RPC_URL is required
 ```
+
+### Choose a venue (optional)
+By default the watcher reads Drift's DLOB. To watch [Phoenix](https://github.com/Ellipsis-Labs/phoenixpy)
+instead — another fully on-chain Solana CLOB — set:
+```bash
+VENUE=phoenix
+MARKETS=4DoNfFBfF7UokCC2FQzriy7yHK6DY6NVdYpuekQ5pRgg   # SOL/USDC market pubkey
+pip install phoenix-trade
+```
+Detectors, risk aggregation, storage and the dashboard are venue-agnostic —
+nothing else changes. If the venue's SDK isn't installed or the connection
+fails, the watcher falls back to the synthetic feed with a warning.
 
 ### Run (read-only)
 ```bash
@@ -178,9 +191,12 @@ Then register it in `watcher.py`. That's it.
 
 ## 🗺️ Roadmap (extension ideas)
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord alerts
+- [x] Time-series storage (SQLite/Postgres) and replay storage foundation
+- [x] Second on-chain venue (Phoenix CLOB, alongside Drift) — set `VENUE=phoenix`
+- [ ] Replay / backtesting over the stored time-series
+- [ ] More Solana venues (OpenBook v2, Zeta) — same collector pattern as Phoenix
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
 - [ ] Prometheus metrics (modeled on the Drift-style exporter)

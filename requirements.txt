@@ -4,6 +4,10 @@ solana>=0.30.0
 solders>=0.18.0
 anchorpy>=0.20.0
 
+# Phoenix Python SDK (optional — only needed for VENUE=phoenix; the watcher
+# falls back to the synthetic feed if it's not installed).
+# phoenix-trade
+
 # Configuration
 python-dotenv>=1.0.0
 

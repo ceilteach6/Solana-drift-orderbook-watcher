@@ -3,18 +3,23 @@ src/collector/orderbook_feed.py
 
 Normalized L2 orderbook model + feed implementations.
 
-Two feeds are provided:
+Three feeds are provided:
 
-* :class:`DriftOrderbookFeed` — the real feed, backed by the ``driftpy`` DLOB
-  subscriber (see :mod:`src.collector.drift_client`).
+* :class:`DriftOrderbookFeed` — backed by the ``driftpy`` DLOB subscriber
+  (see :mod:`src.collector.drift_client`).
+* :class:`PhoenixOrderbookFeed` — backed by the ``phoenix-sdk`` client for
+  Ellipsis Labs' on-chain CLOB (see :mod:`src.collector.phoenix_client`).
 * :class:`SyntheticOrderbookFeed` — a self-contained, network-free generator
   used as a fallback (and for examples/tests). It produces plausible orderbooks
   and occasionally injects bot-like patterns so the detectors have something to
   react to.
 
-``create_feed()`` tries the real feed first and transparently falls back to the
-synthetic one if ``driftpy`` is unavailable or the connection fails, so
-``python main.py`` always runs.
+Both real feeds normalize into the same venue-agnostic ``OrderbookSnapshot``;
+detectors, risk aggregation, storage and the dashboard never see which venue
+produced a snapshot. ``create_feed()`` picks the real feed for
+``settings.venue`` ("drift" or "phoenix") and transparently falls back to the
+synthetic one if the corresponding SDK is unavailable or the connection
+fails, so ``python main.py`` always runs.
 """
 
 from __future__ import annotations
@@ -128,6 +133,59 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
 
 
 # --------------------------------------------------------------------------- #
+# Real feed (phoenix-sdk)
+# --------------------------------------------------------------------------- #
+class PhoenixOrderbookFeed(OrderbookFeed):
+    """Reads L2 orderbooks from the live Phoenix CLOB via ``phoenix-sdk``."""
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self._stack = None  # populated in connect()
+
+    async def connect(self) -> None:
+        # Imported lazily so the package works without phoenix-sdk installed.
+        from src.collector.phoenix_client import PhoenixStack
+
+        self._stack = await PhoenixStack.build(self.settings)
+        logger.info("Connected to Phoenix")
+
+    async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
+        if self._stack is None:
+            raise RuntimeError("connect() must be called before get_snapshot()")
+        raw = await self._stack.get_l2(market, depth=self.settings.orderbook_depth)
+        if raw is None:
+            return None
+        return _snapshot_from_phoenix(market, raw)
+
+    async def close(self) -> None:
+        if self._stack is not None:
+            await self._stack.close()
+
+
+def _snapshot_from_phoenix(market: str, l2) -> OrderbookSnapshot:
+    """Normalize a phoenix-sdk orderbook object/dict into our model.
+
+    Mirrors :func:`_snapshot_from_driftpy`: tolerate either attribute-style
+    (``lvl.price`` / ``lvl.size``) or dict-style (``lvl["price"]``) levels so
+    minor SDK version differences don't crash the watcher.
+    """
+
+    def levels(side) -> list[Level]:
+        out: list[Level] = []
+        for lvl in side or []:
+            price = getattr(lvl, "price", None)
+            size = getattr(lvl, "size", None)
+            if price is None and isinstance(lvl, dict):
+                price, size = lvl.get("price"), lvl.get("size")
+            out.append(Level(_to_float(price), _to_float(size)))
+        return out
+
+    bids = levels(getattr(l2, "bids", None) or [])
+    asks = levels(getattr(l2, "asks", None) or [])
+    return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
+
+
+# --------------------------------------------------------------------------- #
 # Synthetic feed (network-free fallback / demo)
 # --------------------------------------------------------------------------- #
 class SyntheticOrderbookFeed(OrderbookFeed):
@@ -195,18 +253,35 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 # --------------------------------------------------------------------------- #
 # Factory
 # --------------------------------------------------------------------------- #
-async def create_feed(settings) -> OrderbookFeed:
-    """Return a connected feed, preferring the real Drift feed.
+_VENUE_FEEDS = {
+    "drift": DriftOrderbookFeed,
+    "phoenix": PhoenixOrderbookFeed,
+}
 
-    Falls back to the synthetic feed (with a clear warning) when driftpy is
-    missing or the connection cannot be established.
+
+async def create_feed(settings) -> OrderbookFeed:
+    """Return a connected feed for ``settings.venue`` ("drift" or "phoenix").
+
+    Falls back to the synthetic feed (with a clear warning) when the venue's
+    SDK is missing, the venue name is unrecognized, or the connection cannot
+    be established.
     """
-    try:
-        feed: OrderbookFeed = DriftOrderbookFeed(settings)
-        await feed.connect()
-        return feed
-    except Exception as exc:  # ImportError, connection errors, etc.
-        logger.warning("Real Drift feed unavailable (%s); falling back.", exc)
-        synthetic = SyntheticOrderbookFeed(settings)
-        await synthetic.connect()
-        return synthetic
+    feed_cls = _VENUE_FEEDS.get(settings.venue)
+    if feed_cls is None:
+        logger.warning(
+            "Unknown VENUE %r (expected one of %s); falling back to synthetic.",
+            settings.venue, ", ".join(_VENUE_FEEDS),
+        )
+    else:
+        try:
+            feed: OrderbookFeed = feed_cls(settings)
+            await feed.connect()
+            return feed
+        except Exception as exc:  # ImportError, connection errors, etc.
+            logger.warning(
+                "Real %s feed unavailable (%s); falling back.", settings.venue, exc
+            )
+
+    synthetic = SyntheticOrderbookFeed(settings)
+    await synthetic.connect()
+    return synthetic

@@ -43,7 +43,8 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/collector/phoenix_client.py` + `PhoenixOrderbookFeed` — 2. venue (Phoenix CLOB), `VENUE=phoenix` | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -81,7 +82,8 @@ nem avatkozik be. Prioritás szerinti felépítés:
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
-2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
+2. ~~Multi-venue collectorok (egész Solana orderbook)~~ — **megkezdve**, lásd lent
+   (Phoenix collector kész; OpenBook v2 / Zeta még nyitott).
 3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
@@ -100,6 +102,23 @@ risk-aggregátor, a tárolás, a dashboard és az alert **mind az absztrakt
 `src/collector/` Drift-specifikus. Új venue (Phoenix, OpenBook, Zeta, Mango) =
 **új collector**, ami ugyanabba a pipeline-ba táplál. Kis-közepes munka, mert az
 absztrakció már megvan. Ez a `MARKETS` és a collector-réteg bővítése.
+
+> **Státusz (2026-06-30): a Phoenix collector elkészült** —
+> `src/collector/phoenix_client.py` (`PhoenixStack`, a `phoenix-trade` SDK-t
+> lazily importálva, ugyanúgy mint a driftpy-t) + `PhoenixOrderbookFeed` az
+> `orderbook_feed.py`-ban. Új `VENUE` env kulcs (`drift` | `phoenix`)
+> választja ki a feedet a `create_feed()` factoryben; ismeretlen/hiányzó SDK
+> esetén — mint eddig is — a szintetikus feedre esik vissza. Phoenixnél a
+> `MARKETS` market-pubkey-eket vár (nincs név→pubkey lookup az SDK-ban), és
+> nem kell trader keypair az L2-olvasáshoz (még a Driftnél is egyszerűbb
+> read-only path). Lásd a `requirements.txt` megjegyzését és a
+> `config.example.env`-et a `VENUE=phoenix` beállításhoz.
+>
+> A Phoenix SDK API-t a hivatalos `Ellipsis-Labs/phoenixpy` repo alapján
+> kötöttem be (nem volt élő RPC/SDK-telepítés ehhez a session-höz, így ez —
+> a driftpy-integrációhoz hasonlóan — a dokumentált felület alapján készült;
+> ha az SDK újabb verziója eltér, a `phoenix_client.py` a beavatkozási pont).
+> Következő venue-jelöltek: OpenBook v2, Zeta — ugyanez a minta.
 
 **B) Teljes lánc / minden tranzakció — ÚJ ÁG.** Ez már nem orderbook-
 mikrostruktúra, hanem általános on-chain analitika (Geyser/tranzakció-stream,
