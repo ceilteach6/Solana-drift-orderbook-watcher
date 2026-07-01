@@ -71,10 +71,11 @@ def _get_str(name: str, default: str) -> str:
 class Settings:
     """Immutable runtime configuration."""
 
-    # --- Connection ---
-    rpc_url: str
-    drift_env: str
-    keypair_path: str
+    # --- Connection / network ---
+    network: str = "drift"  # "drift" (Solana) or "hyperliquid" (their own L1)
+    rpc_url: str = ""
+    drift_env: str = "mainnet"
+    keypair_path: str = ""
 
     # --- Markets / feed ---
     # A tuple, not a list: ``frozen=True`` only blocks reassigning the field,
@@ -132,6 +133,10 @@ class Settings:
     run_duration_sec: float = 0.0
 
     def __post_init__(self) -> None:
+        if self.network not in ("drift", "hyperliquid"):
+            raise ValueError(
+                f"NETWORK must be 'drift' or 'hyperliquid' (got {self.network!r})"
+            )
         # Hysteresis in RiskAggregator requires clear < alert, or the
         # "alerting" state never clears and cooldown becomes the only gate.
         if self.risk_clear_threshold >= self.risk_alert_threshold:
@@ -151,6 +156,7 @@ def load_settings() -> Settings:
     markets = tuple(m.strip() for m in markets_raw.split(",") if m.strip())
 
     return Settings(
+        network=_get_str("NETWORK", "drift").lower(),
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),

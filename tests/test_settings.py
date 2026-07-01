@@ -20,6 +20,19 @@ def test_default_settings_are_valid():
     Settings(**base_kwargs())  # must not raise
 
 
+def test_default_network_is_drift():
+    assert Settings(**base_kwargs()).network == "drift"
+
+
+def test_accepts_hyperliquid_network():
+    Settings(**base_kwargs(network="hyperliquid"))  # must not raise
+
+
+def test_rejects_unknown_network():
+    with pytest.raises(ValueError, match="NETWORK"):
+        Settings(**base_kwargs(network="ethereum"))
+
+
 def test_rejects_clear_threshold_above_alert_threshold():
     with pytest.raises(ValueError, match="RISK_CLEAR_THRESHOLD"):
         Settings(**base_kwargs(risk_clear_threshold=0.7, risk_alert_threshold=0.6))

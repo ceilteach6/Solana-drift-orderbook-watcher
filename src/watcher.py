@@ -174,7 +174,8 @@ class Watcher:
             logger.exception("Storage write failed for %s", market)
 
     def _banner(self) -> None:
-        print("🔭 Drift Orderbook Watcher — read-only")
+        network = getattr(self.settings, "network", "drift")
+        print(f"🔭 Perp Orderbook Watcher — read-only ({network})")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         mode = "risk-aggregated" if self.aggregator else "raw per-detection"

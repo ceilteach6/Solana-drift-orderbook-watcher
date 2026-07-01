@@ -189,7 +189,13 @@ class SyntheticOrderbookFeed(OrderbookFeed):
     layering detectors fire too.
     """
 
-    _SEED_MIDS = {"SOL-PERP": 150.0, "BTC-PERP": 65000.0, "ETH-PERP": 3400.0}
+    _SEED_MIDS = {
+        # Drift-style names
+        "SOL-PERP": 150.0, "BTC-PERP": 65000.0, "ETH-PERP": 3400.0,
+        # Hyperliquid-style names (plain coin symbols)
+        "SOL": 150.0, "BTC": 65000.0, "ETH": 3400.0,
+        "ARB": 1.20, "AVAX": 40.0, "DOGE": 0.15, "WIF": 2.50,
+    }
 
     def __init__(self, settings, *, rng: random.Random | None = None) -> None:
         self.settings = settings
@@ -246,13 +252,31 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 # Factory
 # --------------------------------------------------------------------------- #
 async def create_feed(settings) -> OrderbookFeed:
-    """Return a connected feed, preferring the real Drift feed.
+    """Return a connected feed for the configured network.
 
-    Falls back to the synthetic feed (with a clear warning) when driftpy is
-    missing or the connection cannot be established.
+    NETWORK=hyperliquid -> HyperliquidOrderbookFeed (public REST API, no SDK)
+    NETWORK=drift (default) -> DriftOrderbookFeed
+
+    Falls back to the synthetic feed (with a clear warning) when the real
+    feed's SDK/API is unavailable or the connection cannot be established.
     """
+    network = getattr(settings, "network", "drift")
+
+    if network == "hyperliquid":
+        from src.collector.hyperliquid_feed import HyperliquidOrderbookFeed
+
+        try:
+            feed: OrderbookFeed = HyperliquidOrderbookFeed(settings)
+            await feed.connect()
+            return feed
+        except Exception as exc:
+            logger.warning("Hyperliquid feed unavailable (%s); falling back.", exc)
+            synthetic = SyntheticOrderbookFeed(settings)
+            await synthetic.connect()
+            return synthetic
+
     try:
-        feed: OrderbookFeed = DriftOrderbookFeed(settings)
+        feed = DriftOrderbookFeed(settings)
         await feed.connect()
         return feed
     except Exception as exc:  # ImportError, connection errors, etc.

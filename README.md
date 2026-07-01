@@ -1,11 +1,11 @@
-# 🔭 Drift Orderbook Watcher & Bot Detector
+# 🔭 Perp Orderbook Watcher & Bot Detector
 
-Open-source, **read-only** orderbook watcher and bot detector for the
-[Drift Protocol](https://drift.trade) leverage (perpetual) markets on Solana.
+Open-source, **read-only** orderbook watcher and bot detector for perpetual
+markets — currently supporting **Drift Protocol** (Solana) and
+**Hyperliquid** (their own L1).
 
-Drift is one of the few Solana-native perp DEXes with a **real on-chain orderbook**
-(DLOB – Decentralized Limit Order Book), which makes it suitable for genuine
-orderbook analysis.
+Both venues expose a real L2 orderbook, which makes them suitable for genuine
+orderbook-pattern analysis. A single normalized detector stack runs on both.
 
 > **⚠️ DISCLAIMER:** Experimental software for educational/research purposes.
 > Bot detection is heuristic — false positives/negatives are possible. This is
@@ -16,25 +16,28 @@ orderbook analysis.
 
 ## 🎯 What it does
 
-1. **Orderbook collector** — real-time L2 orderbook from the Drift DLOB (`driftpy` SDK)
+1. **Orderbook collector** — L2 orderbook from Drift DLOB (`driftpy` SDK) or Hyperliquid REST API
 2. **Bot detector** — identifies suspicious patterns:
    - Repeated order sizes (bot signature)
    - Layering / spoofing-like walls
    - Order flicker (rapid appear/disappear)
-3. **Alert** — console/JSON alerts for suspicious activity (read-only, no intervention)
+   - Bid/ask imbalance surges
+   - Spoof-and-pull moves
+3. **Alert** — console / Telegram / Discord / webhook alerts (read-only, no intervention)
+4. **Persistence** — optional SQLite storage for replay and analysis
 
 ---
 
-## 🧱 Why Drift and not Jupiter?
+## 🌐 Supported networks
 
-| Aspect | Drift | Jupiter Perps |
-|---|---|---|
-| Orderbook type | Real on-chain DLOB | Pool-based (JLP), no orderbook |
-| SDK | `driftpy` (official Python) | Partial (WIP) |
-| Orderbook analysis | ✅ Possible | ❌ Nothing to analyze |
-| Open source | ✅ Fully | Partial (routing closed) |
+| Network | Venue | Orderbook type | Integration | Extras needed |
+|---|---|---|---|---|
+| Solana | Drift Protocol | Real on-chain DLOB | `driftpy` SDK (WebSocket) | Solana RPC URL |
+| Hyperliquid L1 | Hyperliquid | Central limit order book | Public REST API | Nothing — stdlib only |
 
-For orderbook watching, Drift is the logical choice.
+**Why not Jupiter Perps?** Pool-based (JLP) — no real orderbook to analyze.
+
+Switch networks by setting `NETWORK=hyperliquid` (or `NETWORK=drift`, the default) in `.env`.
 
 ---
 
@@ -45,7 +48,8 @@ drift-orderbook-watcher/
 ├── src/
 │   ├── collector/
 │   │   ├── drift_client.py      # DriftClient setup + connection
-│   │   └── orderbook_feed.py    # DLOB subscribe, L2 orderbook stream
+│   │   ├── hyperliquid_feed.py  # Hyperliquid REST L2 feed
+│   │   └── orderbook_feed.py    # Normalized L2 model + feed factory
 │   ├── detector/
 │   │   ├── base.py              # Detector base class
 │   │   ├── repeated_size.py     # Repeated-size detector
@@ -72,8 +76,9 @@ drift-orderbook-watcher/
 ## ⚡ Quick start
 
 ### Prerequisites
-- Python **3.10+** (required by driftpy)
-- A Solana RPC endpoint (recommended: free Helius with a verified email)
+- Python **3.10+**
+- For **Drift**: a Solana RPC endpoint (recommended: free Helius with a verified email)
+- For **Hyperliquid**: nothing extra — uses the public REST API
 
 ### Install
 ```bash
@@ -87,12 +92,17 @@ pip install -r requirements.txt
 ### Configure
 ```bash
 cp config.example.env .env
-# Edit .env: RPC_URL is required
+# Drift (default): set RPC_URL
+# Hyperliquid:     set NETWORK=hyperliquid (no RPC URL needed)
 ```
 
 ### Run (read-only)
 ```bash
+# Drift (default)
 python main.py
+
+# Hyperliquid — watch BTC, ETH and SOL perps
+NETWORK=hyperliquid MARKETS=BTC,ETH,SOL python main.py
 ```
 
 ### Self-test (no network)
@@ -176,14 +186,18 @@ Then register it in `watcher.py`. That's it.
 
 ---
 
-## 🗺️ Roadmap (extension ideas)
+## 🗺️ Roadmap
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord/webhook alerts
+- [x] Time-series storage (SQLite) and a charting dashboard
+- [x] **Hyperliquid network support** (BTC, ETH, SOL, ARB, … via public REST API)
+- [ ] Replay / backtesting over the persisted time series
+- [ ] More Solana venues (Phoenix, OpenBook, Zeta, Mango) on the same collector pipeline
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
-- [ ] Prometheus metrics (modeled on the Drift-style exporter)
+- [ ] Prometheus metrics exporter
+- [ ] dYdX v4 / other chain feed adapters
 
 ---
 

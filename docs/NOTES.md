@@ -45,8 +45,9 @@ kész; csak az értékeket kell beírnod.
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
+| `src/collector/hyperliquid_feed.py` — Hyperliquid REST L2 feed (`NETWORK=hyperliquid`) | ✅ kész (új) |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
-| Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
+| Push a távoli branchre | ✅ ez a session tud pusholni |
 
 ---
 
@@ -90,18 +91,30 @@ nem avatkozik be. Prioritás szerinti felépítés:
 
 ---
 
-## 4. 🌐 Kiterjesztés az egész Solana hálózatra (architektúra-jegyzet)
+## 4. 🌐 Kiterjesztés más hálózatokra / tőzsdékre (architektúra-jegyzet)
 
-A kérdés: bővíthető-e a projekt az egész Solana hálózatra? Két értelemben:
+A kérdés: bővíthető-e a projekt Driften/Solanán túlra? Három értelemben:
 
-**A) Több Solana-tőzsde (orderbook-szint) — KÖNNYEN.** A detektorok, a
+**A) Más blokklánc, saját orderbookkal — MEGTÖRTÉNT.** A detektorok, a
 risk-aggregátor, a tárolás, a dashboard és az alert **mind az absztrakt
-`OrderbookSnapshot`-on dolgoznak** — nem tudnak Driftről. Csak a
-`src/collector/` Drift-specifikus. Új venue (Phoenix, OpenBook, Zeta, Mango) =
-**új collector**, ami ugyanabba a pipeline-ba táplál. Kis-közepes munka, mert az
-absztrakció már megvan. Ez a `MARKETS` és a collector-réteg bővítése.
+`OrderbookSnapshot`-on dolgoznak** — nem tudnak Driftről vagy Solanáról. Ez tette
+lehetővé, hogy **Hyperliquid** (saját L1, nem Solana) támogatást kapjon:
+`src/collector/hyperliquid_feed.py`, kapcsoló: `NETWORK=hyperliquid` (nincs
+RPC-kulcs, publikus REST API, stdlib-only). Ugyanaz a detektor-stack fut rajta,
+mint Driften. *(kész — lásd 2. táblázat)*
 
-**B) Teljes lánc / minden tranzakció — ÚJ ÁG.** Ez már nem orderbook-
+Következő hálózat-jelöltek (mind saját on-chain/CLOB orderbookkal, tehát a
+meglévő detektorok újrahasználhatók): **dYdX v4** (Cosmos appchain, gRPC/REST
+indexer), **Injective Helix** (Cosmos, CLOB modul natívan a láncon). Mindkettő
+új collector + hálózat-specifikus market-név-konvenció, hasonló méretű munka
+volt, mint a Hyperliquid-adapter.
+
+**B) Több Solana-tőzsde (orderbook-szint) — KÖNNYEN, még nincs kódolva.** Új
+venue (Phoenix, OpenBook, Zeta, Mango) = **új collector**, ami ugyanabba a
+pipeline-ba táplál. Kis-közepes munka, mert az absztrakció már megvan. Ez a
+`MARKETS` és a collector-réteg bővítése.
+
+**C) Teljes lánc / minden tranzakció — ÚJ ÁG.** Ez már nem orderbook-
 mikrostruktúra, hanem általános on-chain analitika (Geyser/tranzakció-stream,
 Helius webhookok). Más adatforrás + **új detektor-család** kell (wash trading,
 sandwich/MEV, rug, token-launch). A meglévő detektorok erre nem alkalmazhatók,
