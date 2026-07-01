@@ -127,6 +127,29 @@ def test_record_tick_persists_snapshot_only_when_requested(tmp_path):
     store.close()
 
 
+def test_markets_with_snapshots_and_snapshots_for_market(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=1.0))
+    store.record_snapshot(snap(ts=2.0))
+    store.record_snapshot(snap(market="BTC-PERP", ts=1.5))
+
+    assert store.markets_with_snapshots() == ["BTC-PERP", "SOL-PERP"]
+
+    rows = store.snapshots_for_market("SOL-PERP")
+    assert [r["ts"] for r in rows] == [1.0, 2.0]  # oldest first
+    store.close()
+
+
+def test_snapshots_for_market_limit_keeps_most_recent_oldest_first(tmp_path):
+    store = make_store(tmp_path)
+    for ts in (1.0, 2.0, 3.0, 4.0):
+        store.record_snapshot(snap(ts=ts))
+
+    rows = store.snapshots_for_market("SOL-PERP", limit=2)
+    assert [r["ts"] for r in rows] == [3.0, 4.0]  # most recent 2, still ascending
+    store.close()
+
+
 def test_record_tick_visible_without_explicit_commit(tmp_path):
     # record_tick batches writes into a single commit; readers on the same
     # connection must still see the rows without the caller calling close().

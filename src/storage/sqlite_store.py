@@ -177,6 +177,31 @@ class SQLiteStore(Store):
         )
         return [r["market"] for r in cur.fetchall()]
 
+    def markets_with_snapshots(self) -> list[str]:
+        """Markets that have at least one persisted full L2 book — the input
+        replay needs (``risk``/``detections`` rows alone aren't enough to
+        reconstruct a book to re-run the detectors against)."""
+        cur = self._conn.execute("SELECT DISTINCT market FROM snapshots ORDER BY market")
+        return [r["market"] for r in cur.fetchall()]
+
+    def snapshots_for_market(self, market: str, limit: int | None = None) -> list[sqlite3.Row]:
+        """Persisted L2 books for ``market``, oldest first, ready to replay
+        through the detector stack."""
+        query = "SELECT ts, market, bids, asks FROM snapshots WHERE market = ? ORDER BY ts ASC"
+        params: list = [market]
+        if limit is not None:
+            # Take the most recent `limit` rows but still return them oldest
+            # first, so a bounded replay covers recent history rather than
+            # the oldest (likely least relevant) rows in a long-lived DB.
+            query = (
+                "SELECT ts, market, bids, asks FROM ("
+                "SELECT ts, market, bids, asks FROM snapshots WHERE market = ? "
+                "ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC"
+            )
+            params.append(limit)
+        cur = self._conn.execute(query, params)
+        return list(cur.fetchall())
+
     _ALLOWED_SERIES_COLUMNS = frozenset({"mid", "score"})
 
     def _series(self, column: str, market: str, limit: int):

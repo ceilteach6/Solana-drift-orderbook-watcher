@@ -19,6 +19,10 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay/backtest the detectors over persisted history (needs
+STORAGE_ENABLED=true + PERSIST_SNAPSHOTS=true while the watcher ran):
+  python main.py --replay [--replay-market SOL-PERP] [--replay-limit 20000]
 """
 
 import asyncio
@@ -52,6 +56,11 @@ if __name__ == "__main__":
         from src.dashboard import run_dashboard
 
         sys.exit(run_dashboard(settings))
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import replay_main
+
+        sys.exit(replay_main(settings, sys.argv[1:]))
 
     try:
         asyncio.run(main())
