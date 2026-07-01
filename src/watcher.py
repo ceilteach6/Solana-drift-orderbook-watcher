@@ -128,7 +128,9 @@ class Watcher:
             # Consolidate into a single smoothed risk signal per market.
             risk = self.aggregator.update(market, snapshot.timestamp, detections)
             if risk is not None:
-                self.alert.emit([risk])
+                # Already gated by the aggregator's own threshold/hysteresis —
+                # don't let a separately configured ALERT_MIN_SCORE drop it.
+                self.alert.emit([risk], bypass_score_filter=True)
         elif detections:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)

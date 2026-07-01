@@ -57,7 +57,9 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted (Ctrl+C)")
+        sys.exit(130)
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)

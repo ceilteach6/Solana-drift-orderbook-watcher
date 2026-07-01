@@ -19,6 +19,7 @@ synthetic one if ``driftpy`` is unavailable or the connection fails, so
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
@@ -90,7 +91,12 @@ class DriftOrderbookFeed(OrderbookFeed):
     async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
         if self._stack is None:
             raise RuntimeError("connect() must be called before get_snapshot()")
-        raw = self._stack.get_l2(market, depth=self.settings.orderbook_depth)
+        # get_l2() is synchronous DLOB reconstruction; run it off the event
+        # loop so one slow market can't stall every other market's tick and
+        # the health-check timer.
+        raw = await asyncio.to_thread(
+            self._stack.get_l2, market, depth=self.settings.orderbook_depth
+        )
         if raw is None:
             return None
         return _snapshot_from_driftpy(market, raw)

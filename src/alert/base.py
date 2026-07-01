@@ -35,11 +35,18 @@ class AlertDispatcher:
         self.settings = settings
         self.sinks = list(sinks)
 
-    def emit(self, detections) -> int:
-        """Deliver qualifying detections. Returns how many were emitted."""
+    def emit(self, detections, *, bypass_score_filter: bool = False) -> int:
+        """Deliver qualifying detections. Returns how many were emitted.
+
+        ``bypass_score_filter`` skips the ``alert_min_score`` gate for callers
+        (like the risk aggregator) that already apply their own, more
+        deliberate emission gating — otherwise an independently configured
+        ``ALERT_MIN_SCORE`` can silently swallow every alert the aggregator
+        decides to raise.
+        """
         emitted = 0
         for d in detections:
-            if d.score < self.settings.alert_min_score:
+            if not bypass_score_filter and d.score < self.settings.alert_min_score:
                 continue
             for sink in self.sinks:
                 try:
