@@ -111,3 +111,29 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_record_tick_writes_snapshot_detections_and_risk_in_one_transaction(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick(
+        snapshot=snap(ts=1.0),
+        ts=1.0,
+        detections=[det("imbalance", 0.9)],
+        risk=("SOL-PERP", 0.55, 150.0),
+    )
+    assert store.counts() == {"snapshots": 1, "detections": 1, "risk": 1}
+    store.close()
+
+
+def test_record_tick_without_snapshot_or_risk_only_writes_detections(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick(ts=1.0, detections=[det("flicker", 0.8)])
+    assert store.counts() == {"snapshots": 0, "detections": 1, "risk": 0}
+    store.close()
+
+
+def test_record_tick_with_no_detections_and_no_risk_is_noop(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick(ts=1.0)
+    assert store.counts() == {"snapshots": 0, "detections": 0, "risk": 0}
+    store.close()

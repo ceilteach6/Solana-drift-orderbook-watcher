@@ -38,6 +38,32 @@ def _get_str(name: str, default: str) -> str:
     return raw.strip() if raw not in (None, "") else default
 
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var with one consistent rule for every flag.
+
+    Recognized true/false spellings always win regardless of ``default``.
+    Anything else (typos like ``disabled`` or ``maybe``) falls back to
+    ``default`` rather than being silently misread as the opposite of what
+    the operator intended — the previous code had two different parsing
+    strategies (inclusion-list vs exclusion-list) across flags, so an
+    unrecognized value could resolve to True on one setting and False on
+    another for the same typo.
+    """
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration."""
@@ -102,7 +128,7 @@ def load_settings() -> Settings:
     markets_raw = _get_str("MARKETS", "SOL-PERP")
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    result = Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
@@ -120,20 +146,16 @@ def load_settings() -> Settings:
         spoof_wall_ratio=_get_float("SPOOF_WALL_RATIO", 5.0),
         spoof_min_price_move=_get_float("SPOOF_MIN_PRICE_MOVE", 0.001),
         spoof_pull_fraction=_get_float("SPOOF_PULL_FRACTION", 0.5),
-        risk_aggregation=_get_str("RISK_AGGREGATION", "true").lower()
-        not in ("0", "false", "no", "off"),
+        risk_aggregation=_get_bool("RISK_AGGREGATION", True),
         risk_smoothing=_get_float("RISK_SMOOTHING", 0.4),
         risk_alert_threshold=_get_float("RISK_ALERT_THRESHOLD", 0.6),
         risk_clear_threshold=_get_float("RISK_CLEAR_THRESHOLD", 0.4),
         risk_alert_cooldown_sec=_get_float("RISK_ALERT_COOLDOWN_SEC", 30.0),
-        healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
-        in ("1", "true", "yes", "on"),
+        healthcheck_enabled=_get_bool("HEALTHCHECK_ENABLED", False),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
-        storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
-        in ("1", "true", "yes", "on"),
+        storage_enabled=_get_bool("STORAGE_ENABLED", False),
         db_path=_get_str("DB_PATH", "data/watcher.db"),
-        persist_snapshots=_get_str("PERSIST_SNAPSHOTS", "false").lower()
-        in ("1", "true", "yes", "on"),
+        persist_snapshots=_get_bool("PERSIST_SNAPSHOTS", False),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
@@ -143,6 +165,61 @@ def load_settings() -> Settings:
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
+    _validate(result)
+    return result
+
+
+def _validate(s: Settings) -> None:
+    """Fail fast on out-of-range config instead of degrading silently.
+
+    A watcher meant to run 24/7 unattended should refuse to start on a bad
+    ``.env`` rather than run for hours in a broken state (e.g. an EMA alpha
+    outside (0, 1] pushes the smoothed risk score outside [0, 1] forever, or
+    a clear-threshold >= alert-threshold means the risk aggregator's
+    hysteresis never latches or never clears — either way it never alerts
+    again after the first tick).
+    """
+    errors: list[str] = []
+
+    if not (0 < s.risk_smoothing <= 1):
+        errors.append(f"RISK_SMOOTHING must be in (0, 1], got {s.risk_smoothing}")
+    if not (0 <= s.risk_alert_threshold <= 1):
+        errors.append(
+            f"RISK_ALERT_THRESHOLD must be in [0, 1], got {s.risk_alert_threshold}"
+        )
+    if not (0 <= s.risk_clear_threshold <= 1):
+        errors.append(
+            f"RISK_CLEAR_THRESHOLD must be in [0, 1], got {s.risk_clear_threshold}"
+        )
+    if (
+        s.risk_aggregation
+        and not errors
+        and s.risk_clear_threshold >= s.risk_alert_threshold
+    ):
+        errors.append(
+            "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+            f"(got clear={s.risk_clear_threshold}, alert={s.risk_alert_threshold}) "
+            "— otherwise the risk aggregator can never clear an alert, or "
+            "never re-arm after one"
+        )
+    if s.update_frequency_ms <= 0:
+        errors.append(f"UPDATE_FREQUENCY_MS must be > 0, got {s.update_frequency_ms}")
+    if s.orderbook_depth <= 0:
+        errors.append(f"ORDERBOOK_DEPTH must be > 0, got {s.orderbook_depth}")
+    if not (0 < s.imbalance_min_ratio <= 1):
+        errors.append(
+            f"IMBALANCE_MIN_RATIO must be in (0, 1], got {s.imbalance_min_ratio}"
+        )
+    if s.healthcheck_enabled and s.healthcheck_interval_sec <= 0:
+        errors.append(
+            "HEALTHCHECK_INTERVAL_SEC must be > 0 when HEALTHCHECK_ENABLED is set, "
+            f"got {s.healthcheck_interval_sec}"
+        )
+
+    if errors:
+        raise ValueError(
+            "Invalid configuration (check your .env):\n- " + "\n- ".join(errors)
+        )
 
 
 # Ready-to-use singleton.

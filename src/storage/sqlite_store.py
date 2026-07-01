@@ -97,7 +97,7 @@ class SQLiteStore(Store):
         self._conn.commit()
 
     # ------------------------------------------------------------------ #
-    def record_snapshot(self, snapshot) -> None:
+    def _insert_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
         spread = (best_ask - best_bid) if (best_bid and best_ask) else None
@@ -115,10 +115,8 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
 
-    def record_detections(self, ts: float, detections) -> None:
-        """Record detections, stamped with the snapshot timestamp."""
+    def _insert_detections(self, ts: float, detections) -> None:
         rows = [
             (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
             for d in detections
@@ -130,13 +128,40 @@ class SQLiteStore(Store):
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
 
-    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+    def _insert_risk(self, market: str, ts: float, score: float, mid=None) -> None:
         self._conn.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
+
+    def record_snapshot(self, snapshot) -> None:
+        self._insert_snapshot(snapshot)
+        self._conn.commit()
+
+    def record_detections(self, ts: float, detections) -> None:
+        """Record detections, stamped with the snapshot timestamp."""
+        self._insert_detections(ts, detections)
+        self._conn.commit()
+
+    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+        self._insert_risk(market, ts, score, mid)
+        self._conn.commit()
+
+    def record_tick(self, *, snapshot=None, ts: float, detections=(), risk=None) -> None:
+        """Persist one watcher tick's writes (snapshot + detections + risk) as a
+        single transaction — one fsync instead of up to three.
+
+        ``risk``, if given, is a ``(market, score, mid)`` tuple. Called on the
+        hot path (once per market per tick) so a long-running, high-frequency
+        watcher doesn't pay a disk sync per individual insert.
+        """
+        if snapshot is not None:
+            self._insert_snapshot(snapshot)
+        self._insert_detections(ts, detections)
+        if risk is not None:
+            market, score, mid = risk
+            self._insert_risk(market, ts, score, mid)
         self._conn.commit()
 
     # ------------------------------------------------------------------ #

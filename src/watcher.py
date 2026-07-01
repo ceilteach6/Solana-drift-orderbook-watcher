@@ -138,15 +138,19 @@ class Watcher:
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
             return
+        risk = None
+        if self.aggregator is not None:
+            risk = (market, self.aggregator.score(market), snapshot.mid)
         try:
-            if self.settings.persist_snapshots:
-                self.store.record_snapshot(snapshot)
-            self.store.record_detections(snapshot.timestamp, detections)
-            if self.aggregator is not None:
-                self.store.record_risk(
-                    market, snapshot.timestamp,
-                    self.aggregator.score(market), snapshot.mid,
-                )
+            # One transaction per tick (not one per table) — keeps disk sync
+            # overhead flat regardless of how many stores are enabled, which
+            # matters for a watcher meant to run 24/7 unattended.
+            self.store.record_tick(
+                snapshot=snapshot if self.settings.persist_snapshots else None,
+                ts=snapshot.timestamp,
+                detections=detections,
+                risk=risk,
+            )
         except Exception:
             logger.exception("Storage write failed for %s", market)
 

@@ -48,6 +48,22 @@ kész; csak az értékeket kell beírnod.
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
 
+**2026-07-01 — robusztussági audit + javítások (nem alkalmi patch, szerkezeti):**
+- `src/storage/sqlite_store.py` + `src/watcher.py`: minden tick 3 külön
+  `commit()`-et hívott (snapshot/detections/risk) → 24/7 üzemben feleslegesen
+  sok fsync. Új `record_tick()` egy tranzakcióban írja mindhármat; a régi
+  `record_*` metódusok megmaradtak (tesztek, közvetlen hívók miatt).
+- `config/settings.py`: a boolean env-parsing kétféle logikával futott
+  (kizáró lista vs. engedélyező lista) → ugyanaz az elgépelt érték
+  (`RISK_AGGREGATION=disabled`) más eredményt adott volna, mint egy másik
+  flagen. Egységes `_get_bool()` — ismeretlen érték mindig a default-ra esik
+  vissza. Emellett `_validate()` a `load_settings()` végén elutasítja azokat
+  a konfigurációkat, amik csendben törnék el a risk-aggregátort (pl.
+  `RISK_SMOOTHING` a (0,1] tartományon kívül, vagy `RISK_CLEAR_THRESHOLD >=
+  RISK_ALERT_THRESHOLD` — ez utóbbi azt jelentené, hogy a hiszterézis soha
+  nem old fel egy riasztást, vagy soha nem lép be újra).
+- Új tesztek: `tests/test_settings.py`, `tests/test_storage.py` bővítve.
+
 ---
 
 ## 3. 🛡️ A védelem (bot-detektálás) további felépítési pontjai
