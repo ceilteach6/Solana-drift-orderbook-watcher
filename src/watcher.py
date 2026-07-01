@@ -56,7 +56,17 @@ class Watcher:
         )
         self._banner()
         if self.store is not None:
-            self.store.connect()
+            try:
+                self.store.connect()
+            except Exception:
+                # Persistence is an optional add-on (detectors/alerts still run
+                # without it) — degrade instead of taking the whole watcher down
+                # over e.g. a permissions error or a locked db file.
+                logger.exception(
+                    "Storage init failed (%s) — continuing without persistence.",
+                    self.settings.db_path,
+                )
+                self.store = None
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
@@ -133,7 +143,10 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        if self.store is not None:
+            # sqlite3 commits are blocking I/O (fsync); run off the event loop
+            # so a slow disk can't stall feed polling for every other market.
+            await asyncio.to_thread(self._persist, market, snapshot, detections)
 
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
