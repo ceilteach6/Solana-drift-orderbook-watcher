@@ -13,7 +13,7 @@ Import the ready-to-use singleton:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 try:
     from dotenv import load_dotenv
@@ -38,6 +38,10 @@ def _get_str(name: str, default: str) -> str:
     return raw.strip() if raw not in (None, "") else default
 
 
+class ConfigError(ValueError):
+    """Raised when the loaded environment produces an unusable configuration."""
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration."""
@@ -48,7 +52,7 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    markets: tuple[str, ...] = ()
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
 
@@ -96,17 +100,81 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def validate(self) -> None:
+        """Fail fast on configuration that would misbehave deep into a run.
+
+        Called once from :func:`load_settings`, so a bad ``.env`` value is
+        reported clearly at startup instead of surfacing later as a
+        ``ZeroDivisionError`` in a detector, a busy-loop, or a risk gauge
+        that can never clear.
+        """
+        errors: list[str] = []
+
+        if not self.markets:
+            errors.append("MARKETS must list at least one market")
+        if self.orderbook_depth < 1:
+            errors.append("ORDERBOOK_DEPTH must be >= 1")
+        if self.update_frequency_ms <= 0:
+            errors.append("UPDATE_FREQUENCY_MS must be > 0")
+
+        if self.repeated_min_count < 1:
+            errors.append("REPEATED_MIN_COUNT must be >= 1")
+        if self.layering_min_levels < 1:
+            errors.append("LAYERING_MIN_LEVELS must be >= 1")
+        if self.flicker_min_events < 1:
+            errors.append("FLICKER_MIN_EVENTS must be >= 1")
+        if self.flicker_window_sec <= 0:
+            errors.append("FLICKER_WINDOW_SEC must be > 0")
+        if not 0.0 < self.imbalance_min_ratio <= 1.0:
+            errors.append("IMBALANCE_MIN_RATIO must be in (0, 1]")
+        if self.imbalance_min_levels < 1:
+            errors.append("IMBALANCE_MIN_LEVELS must be >= 1")
+        if self.spoof_window_sec <= 0:
+            errors.append("SPOOF_WINDOW_SEC must be > 0")
+        if self.spoof_min_price_move <= 0:
+            errors.append("SPOOF_MIN_PRICE_MOVE must be > 0 (divides a ratio)")
+        if self.spoof_wall_ratio <= 0:
+            errors.append("SPOOF_WALL_RATIO must be > 0")
+        if not 0.0 < self.spoof_pull_fraction <= 1.0:
+            errors.append("SPOOF_PULL_FRACTION must be in (0, 1]")
+
+        if self.risk_aggregation:
+            if not 0.0 < self.risk_smoothing <= 1.0:
+                errors.append("RISK_SMOOTHING must be in (0, 1]")
+            if not 0.0 < self.risk_alert_threshold <= 1.0:
+                errors.append("RISK_ALERT_THRESHOLD must be in (0, 1]")
+            if not 0.0 <= self.risk_clear_threshold < self.risk_alert_threshold:
+                errors.append(
+                    "RISK_CLEAR_THRESHOLD must be >= 0 and < RISK_ALERT_THRESHOLD "
+                    "(otherwise the alert can never clear, or flaps every tick)"
+                )
+            if self.risk_alert_cooldown_sec < 0:
+                errors.append("RISK_ALERT_COOLDOWN_SEC must be >= 0")
+
+        if not 0.0 <= self.alert_min_score <= 1.0:
+            errors.append("ALERT_MIN_SCORE must be in [0, 1]")
+        if not 1 <= self.dashboard_port <= 65535:
+            errors.append("DASHBOARD_PORT must be a valid TCP port (1-65535)")
+
+        if errors:
+            raise ConfigError(
+                "Invalid configuration:\n  - " + "\n  - ".join(errors)
+            )
+
 
 def load_settings() -> Settings:
-    """Build a :class:`Settings` instance from the current environment."""
-    markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    """Build a :class:`Settings` instance from the current environment.
 
-    return Settings(
+    Raises :class:`ConfigError` if the resulting configuration is invalid.
+    """
+    markets_raw = _get_str("MARKETS", "SOL-PERP")
+    markets = tuple(m.strip() for m in markets_raw.split(",") if m.strip())
+
+    result = Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=markets or ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
@@ -143,6 +211,8 @@ def load_settings() -> Settings:
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
     )
+    result.validate()
+    return result
 
 
 # Ready-to-use singleton.

@@ -26,14 +26,25 @@ logger = logging.getLogger(__name__)
 class DriftStack:
     """Owns the DriftClient + DLOB subscriber lifecycle."""
 
-    def __init__(self, drift_client, dlob_subscriber, connection) -> None:
+    def __init__(
+        self, drift_client, dlob_subscriber, connection, user_map, slot_subscriber
+    ) -> None:
         self._drift_client = drift_client
         self._dlob = dlob_subscriber
         self._connection = connection
+        self._user_map = user_map
+        self._slot_subscriber = slot_subscriber
 
     @classmethod
     async def build(cls, settings) -> "DriftStack":
-        """Connect read-only and start the DLOB subscriber."""
+        """Connect read-only and start the DLOB subscriber.
+
+        Every ``subscribe()`` call below opens a websocket listener. If a
+        later call fails, everything already opened is torn down before
+        re-raising — otherwise the caller (``create_feed``) just falls back
+        to the synthetic feed and those connections leak as orphaned
+        background tasks for the life of the process.
+        """
         # Imports are local so a missing driftpy turns into a clean ImportError
         # at call time (handled by the feed factory).
         from solana.rpc.async_api import AsyncClient
@@ -49,47 +60,67 @@ class DriftStack:
         from driftpy.slot.slot_subscriber import SlotSubscriber
 
         connection = AsyncClient(settings.rpc_url)
+        drift_client = None
+        user_map = None
+        slot_subscriber = None
+        dlob_subscriber = None
 
-        # An ephemeral keypair is enough to *watch* — no funds, no signing.
-        if settings.keypair_path:
-            with open(settings.keypair_path) as fh:
-                import json
+        try:
+            # An ephemeral keypair is enough to *watch* — no funds, no signing.
+            if settings.keypair_path:
+                with open(settings.keypair_path) as fh:
+                    import json
 
-                kp = Keypair.from_bytes(bytes(json.load(fh)))
-        else:
-            kp = Keypair()
-        wallet = Wallet(kp)
+                    kp = Keypair.from_bytes(bytes(json.load(fh)))
+            else:
+                kp = Keypair()
+            wallet = Wallet(kp)
 
-        drift_client = DriftClient(
-            connection,
-            wallet,
-            settings.drift_env,
-            account_subscription=AccountSubscriptionConfig("websocket"),
-        )
-        await drift_client.subscribe()
+            drift_client = DriftClient(
+                connection,
+                wallet,
+                settings.drift_env,
+                account_subscription=AccountSubscriptionConfig("websocket"),
+            )
+            await drift_client.subscribe()
 
-        user_map = UserMap(
-            UserMapConfig(drift_client, WebsocketConfig())
-        )
-        await user_map.subscribe()
+            user_map = UserMap(
+                UserMapConfig(drift_client, WebsocketConfig())
+            )
+            await user_map.subscribe()
 
-        slot_subscriber = SlotSubscriber(drift_client)
-        await slot_subscriber.subscribe()
+            slot_subscriber = SlotSubscriber(drift_client)
+            await slot_subscriber.subscribe()
 
-        dlob_config = DLOBClientConfig(
-            drift_client, user_map, slot_subscriber, settings.update_frequency_ms
-        )
-        dlob_subscriber = DLOBSubscriber(config=dlob_config)
-        await dlob_subscriber.subscribe()
+            dlob_config = DLOBClientConfig(
+                drift_client, user_map, slot_subscriber, settings.update_frequency_ms
+            )
+            dlob_subscriber = DLOBSubscriber(config=dlob_config)
+            await dlob_subscriber.subscribe()
+        except Exception:
+            await cls._teardown(
+                connection, drift_client, user_map, slot_subscriber, dlob_subscriber
+            )
+            raise
 
-        return cls(drift_client, dlob_subscriber, connection)
+        return cls(drift_client, dlob_subscriber, connection, user_map, slot_subscriber)
 
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
         return self._dlob.get_l2_orderbook_sync(market, depth=depth)
 
     async def close(self) -> None:
-        for obj in (self._dlob, self._drift_client):
+        await self._teardown(
+            self._connection,
+            self._drift_client,
+            self._user_map,
+            self._slot_subscriber,
+            self._dlob,
+        )
+
+    @staticmethod
+    async def _teardown(connection, drift_client, user_map, slot_subscriber, dlob) -> None:
+        for obj in (dlob, slot_subscriber, user_map, drift_client):
             unsub = getattr(obj, "unsubscribe", None)
             if unsub is None:
                 continue
@@ -100,6 +131,6 @@ class DriftStack:
             except Exception:  # pragma: no cover - best-effort teardown
                 logger.debug("Error during teardown of %r", obj, exc_info=True)
         try:
-            await self._connection.close()
+            await connection.close()
         except Exception:  # pragma: no cover
             logger.debug("Error closing RPC connection", exc_info=True)

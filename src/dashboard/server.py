@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
+# SQLite treats a negative LIMIT as "no limit", and an unbounded positive
+# value lets a client force a multi-million-row scan — clamp to a sane range.
+_MIN_LIMIT = 1
+_MAX_LIMIT = 5000
+
 
 def _make_handler(db_path: str):
     class Handler(BaseHTTPRequestHandler):
@@ -66,6 +71,7 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            limit = max(_MIN_LIMIT, min(limit, _MAX_LIMIT))
 
             if route in ("/", "/index.html"):
                 return self._send_html()

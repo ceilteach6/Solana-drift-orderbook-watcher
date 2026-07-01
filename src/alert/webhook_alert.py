@@ -17,12 +17,19 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# Shared across all WebhookAlert instances/sinks (Telegram + generic webhook
+# both go through here). Bounded so a slow/unreachable endpoint queues
+# deliveries instead of spawning one new OS thread per alert forever — under
+# a sustained run with no cooldown (raw, non-aggregated mode) that unbounded
+# spawn can pile up dozens-to-hundreds of blocked threads.
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook-alert")
 
 
 class WebhookAlert(Alert):
@@ -38,13 +45,11 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared worker pool to avoid blocking the event loop."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _EXECUTOR.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

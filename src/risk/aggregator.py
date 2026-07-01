@@ -24,6 +24,8 @@ How:
 
 from __future__ import annotations
 
+import math
+
 from src.detector.base import Detection
 
 
@@ -70,6 +72,12 @@ class RiskAggregator:
     def _strongest_per_detector(detections) -> dict[str, float]:
         out: dict[str, float] = {}
         for d in detections:
+            if not math.isfinite(d.score):
+                # A NaN/inf score (a buggy or future detector) must not enter
+                # the EMA below — min()/max() pass NaN through unchanged, and
+                # once the smoothed score goes NaN it stays NaN forever,
+                # silently disabling risk alerting for that market.
+                continue
             score = min(max(d.score, 0.0), 1.0)
             if score > out.get(d.detector, 0.0):
                 out[d.detector] = score

@@ -100,15 +100,24 @@ class DriftOrderbookFeed(OrderbookFeed):
             await self._stack.close()
 
 
-def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
-    # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
-    # helpers usually expose ``price`` / ``size`` attributes already; we coerce
-    # defensively so version differences don't crash the watcher.
+try:
+    # driftpy's L2 levels carry raw fixed-point integers, not human-readable
+    # floats: price is scaled by PRICE_PRECISION (1e6), size by BASE_PRECISION
+    # (1e9). Without dividing these out, every price/size the watcher sees is
+    # off by 1e6x/1e9x — wrong storage, wrong dashboard, wrong alert text.
+    from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
+except Exception:  # pragma: no cover - driftpy optional at import time
+    PRICE_PRECISION = 1_000_000
+    BASE_PRECISION = 1_000_000_000
+
+
+def _to_float(value, precision: int) -> float:
+    """Coerce a driftpy raw fixed-point integer to a descaled float."""
     try:
-        return float(value)
+        raw = float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        raw = float(getattr(value, "value", 0))
+    return raw / precision
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
@@ -119,11 +128,16 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            out.append(Level(_to_float(price, PRICE_PRECISION), _to_float(size, BASE_PRECISION)))
         return out
 
     bids = levels(getattr(l2, "bids", None) or [])
     asks = levels(getattr(l2, "asks", None) or [])
+    # Every consumer (mid price, detectors, storage) assumes bids[0]/asks[0]
+    # is the best price — enforce that ordering here rather than trusting the
+    # upstream DLOB merge to preserve it.
+    bids.sort(key=lambda lvl: lvl.price, reverse=True)
+    asks.sort(key=lambda lvl: lvl.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

@@ -76,3 +76,17 @@ def test_ema_smoothing_requires_sustained_signal():
     for t in range(1, 6):
         fired = agg.update("SOL-PERP", float(t), strong) or fired
     assert fired is not None
+
+
+def test_nan_score_is_dropped_instead_of_poisoning_the_ema():
+    agg = RiskAggregator(make_settings())
+    # A NaN score (e.g. from a buggy detector) must not enter the EMA — once
+    # smoothed = NaN it would stay NaN on every subsequent tick forever.
+    out = agg.update("SOL-PERP", 0.0, [det("a", float("nan"))])
+    assert out is None
+    assert agg.score("SOL-PERP") == 0.0
+
+    # And the aggregator keeps working normally afterwards.
+    out = agg.update("SOL-PERP", 1.0, [det("a", 0.9)])
+    assert out is not None
+    assert agg.score("SOL-PERP") == 0.9

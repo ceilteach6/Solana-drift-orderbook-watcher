@@ -79,6 +79,37 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Hibajavítási kör ✅ (2026-07-01)
+Mélyaudit + tényleges javítás (nem tüneti patch, hanem a gyökérnél):
+- `config/settings.py` — `markets` most valódi `tuple` (a `frozen=True` eddig
+  mit sem ért egy mutálható listával); új `Settings.validate()` a betöltéskor
+  elutasítja a rossz konfigot (pl. `SPOOF_MIN_PRICE_MOVE=0` →
+  `ZeroDivisionError`, `RISK_CLEAR_THRESHOLD >= RISK_ALERT_THRESHOLD` → a
+  riasztás sose törlődik, `UPDATE_FREQUENCY_MS<=0` → busy-loop).
+- `src/collector/orderbook_feed.py` — a driftpy nyers fixpontos egészeit
+  (`PRICE_PRECISION`/`BASE_PRECISION`) eddig sosem skálázta vissza (élesben
+  minden ár/méret 1e6x/1e9x hibás lett volna); bid/ask sorrend biztosítva.
+- `src/collector/drift_client.py` — `user_map`/`slot_subscriber` eddig sosem
+  lett leiratkoztatva (erőforrás-szivárgás); `build()` most visszabontja a
+  már megnyitott kapcsolatokat, ha egy későbbi `subscribe()` elhasal.
+- `src/watcher.py` — az intervallum egyetlen helyen (`self._interval`) számolt
+  (a duplikált levezetés korábban szét tudott csúszni); az előzmény-puffer
+  most a leghosszabb detektor-ablakhoz (spoof-pull) igazodik, nem csak a
+  flickerhez; storage-init hiba már nem dönti le az egész watchert; a
+  risk/alert kiértékelés ugyanúgy védett, mint a detektor-hurok; ismételt
+  sikertelen/üres snapshot után a feed automatikusan újracsatlakozik
+  (backoff-fal).
+- `src/dashboard/server.py` — `?limit=` most `[1, 5000]`-re szorítva (negatív
+  = "korlátlan" SQLite-ban, ez volt a DoS-rés).
+- `src/risk/aggregator.py` — NaN/inf score kiszűrve, mielőtt bekerülne az
+  EMA-ba (különben egy piac kockázati szintje örökre NaN maradna).
+- `src/alert/webhook_alert.py` — a soronkénti `threading.Thread` helyett
+  korlátozott (4 worker) `ThreadPoolExecutor`, hogy egy lassú webhook ne
+  halmozzon fel korlátlan szálat.
+- 22 új regressziós teszt (`tests/test_settings.py`, `test_orderbook_feed.py`,
+  `test_drift_client.py`, `test_watcher.py`, + kiegészítés `test_risk.py`-ban).
+  `pytest` 53/53, `--selftest` 6/6.
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
