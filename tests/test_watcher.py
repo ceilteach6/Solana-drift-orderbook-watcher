@@ -49,6 +49,61 @@ class _RecordingStore:
         self.calls.append(threading.get_ident())
 
 
+class _BoomAggregator:
+    def update(self, market, timestamp, detections):
+        raise TypeError("simulated malformed Detection")
+
+
+class _BoomAlert:
+    def emit(self, detections):
+        raise TypeError("simulated broken alert sink")
+
+
+class _EmptyFeed:
+    async def get_snapshot(self, market):
+        return SimpleNamespace(mid=100.0)
+
+
+def test_tick_survives_a_broken_aggregator_or_alert_sink():
+    # Regression: an exception raised while aggregating risk or emitting an
+    # alert (e.g. a malformed Detection with a non-comparable score) used to
+    # propagate straight out of _tick(), through _run_loop()'s bare while
+    # True, and crash the entire watcher process — taking every market down
+    # over a single bad detection instead of just skipping that alert.
+    watcher = object.__new__(Watcher)
+    watcher.feed = _EmptyFeed()
+    watcher.detectors = []
+    watcher._history = {"SOL-PERP": []}
+    watcher.aggregator = _BoomAggregator()
+    watcher.alert = _BoomAlert()
+    watcher.store = None
+    watcher.settings = SimpleNamespace(persist_snapshots=False)
+
+    # Must not raise.
+    asyncio.run(watcher._tick("SOL-PERP"))
+
+
+def test_healthcheck_survives_a_broken_alert_sink(monkeypatch):
+    # Same failure mode as above, via the periodic self-test health-check
+    # path instead of the per-tick alert path.
+    import src.watcher as watcher_module
+
+    monkeypatch.setattr(
+        watcher_module, "run_selftest",
+        lambda settings: [SimpleNamespace(name="flicker", passed=False)],
+    )
+
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(
+        healthcheck_enabled=True, healthcheck_interval_sec=0.0,
+    )
+    watcher.alert = _BoomAlert()
+    watcher._last_healthcheck = 0.0
+
+    # Must not raise.
+    watcher._maybe_healthcheck()
+
+
 def test_persist_runs_the_blocking_store_write_off_the_event_loop():
     # Regression: _persist used to call store.record_tick() directly inside
     # the async _tick(), so its blocking commit()/fsync ran on the event loop

@@ -61,3 +61,7 @@ if __name__ == "__main__":
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
+        # Exit non-zero so a process supervisor (systemd Restart=on-failure,
+        # Docker restart policy, k8s liveness probe) sees this as a crash and
+        # restarts the watcher instead of treating it as a clean shutdown.
+        sys.exit(1)
