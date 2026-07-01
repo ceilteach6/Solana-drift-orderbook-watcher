@@ -26,6 +26,15 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 
+def history_length(settings) -> int:
+    """Prior-snapshot count to retain per market — enough to cover the flicker
+    window at the configured poll interval. Shared with the replay pipeline
+    (:mod:`src.replay`) so backtests bound history the same way live ticks do.
+    """
+    interval = max(settings.update_frequency_ms / 1000, 0.001)
+    return max(8, int(settings.flicker_window_sec / interval) + 4)
+
+
 class Watcher:
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -37,8 +46,7 @@ class Watcher:
         self._last_healthcheck: float = 0.0
 
         # Keep enough history per market to cover the flicker window.
-        interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        history_len = history_length(settings)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }

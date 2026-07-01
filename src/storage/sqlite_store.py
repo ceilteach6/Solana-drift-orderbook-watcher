@@ -171,6 +171,21 @@ class SQLiteStore(Store):
     def risk_series(self, market: str, limit: int = 2000):
         return self._series("score", market, limit)
 
+    def snapshot_rows(self, market: str, limit: int | None = None):
+        """Raw persisted L2 snapshots for ``market``, oldest first.
+
+        Used by :mod:`src.replay` to reconstruct :class:`OrderbookSnapshot`
+        objects for backtesting; requires ``PERSIST_SNAPSHOTS=true`` to have
+        been set while the watcher recorded this data.
+        """
+        query = "SELECT ts, bids, asks FROM snapshots WHERE market = ? ORDER BY ts ASC"
+        params: list = [market]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        cur = self._conn.execute(query, params)
+        return list(cur.fetchall())
+
     def detection_markers(self, market: str, limit: int = 200):
         cur = self._conn.execute(
             "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "

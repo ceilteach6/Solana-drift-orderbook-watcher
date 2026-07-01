@@ -19,6 +19,11 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay persisted snapshots through the detector stack (needs
+PERSIST_SNAPSHOTS=true while capturing):
+  python main.py --replay SOL-PERP
+  python main.py --replay SOL-PERP --speed 10   # 10x realtime pacing
 """
 
 import asyncio
@@ -52,6 +57,30 @@ if __name__ == "__main__":
         from src.dashboard import run_dashboard
 
         sys.exit(run_dashboard(settings))
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import replay_main
+
+        args = sys.argv[1:]
+        idx = args.index("--replay")
+        market = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("--") else None
+        if not market:
+            print("Usage: python main.py --replay <MARKET> [--speed N]")
+            sys.exit(1)
+
+        speed = 0.0
+        if "--speed" in args:
+            sidx = args.index("--speed")
+            if sidx + 1 >= len(args):
+                print("❌ --speed requires a numeric value")
+                sys.exit(1)
+            try:
+                speed = float(args[sidx + 1])
+            except ValueError:
+                print(f"❌ --speed value must be numeric, got {args[sidx + 1]!r}")
+                sys.exit(1)
+
+        sys.exit(replay_main(settings, market, speed))
 
     try:
         asyncio.run(main())

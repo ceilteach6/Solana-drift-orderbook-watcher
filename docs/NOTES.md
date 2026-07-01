@@ -43,7 +43,8 @@ kész; csak az értékeket kell beírnod.
 | `src/risk/aggregator.py` — risk-aggregátor (EMA + hiszterézis + cooldown) | ✅ kész |
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
-| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
+| `src/replay.py` — replay/backtest a perzisztált snapshotokon (`--replay`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -79,13 +80,19 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Replay / backtesting ✅
+- **Replay** (`src/replay.py`) — a perzisztált L2 snapshotokat (`PERSIST_SNAPSHOTS=true`)
+  újrajátssza egy friss detektor + risk-aggregátor + alert példányon keresztül,
+  így küszöbérték-hangolás végezhető a rögzített történelmen anélkül, hogy a
+  live feedhez vagy a mentett detekciókhoz hozzáérnénk. `python main.py --replay
+  SOL-PERP [--speed N]` (`--speed` = realtime szorzó; 0 = lehető leggyorsabban). *(kész)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
-2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+1. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
+2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---
