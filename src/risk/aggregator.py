@@ -24,7 +24,12 @@ How:
 
 from __future__ import annotations
 
+import logging
+import math
+
 from src.detector.base import Detection
+
+logger = logging.getLogger(__name__)
 
 
 class RiskAggregator:
@@ -70,6 +75,16 @@ class RiskAggregator:
     def _strongest_per_detector(detections) -> dict[str, float]:
         out: dict[str, float] = {}
         for d in detections:
+            if not math.isfinite(d.score):
+                # A NaN/inf score can't be clamped (comparisons with NaN are
+                # always False, so it would just vanish from the noisy-OR
+                # instead of raising) — treat it as a detector bug and skip
+                # it loudly rather than silently under-counting risk.
+                logger.warning(
+                    "Detector %s returned non-finite score %r on %s — ignoring",
+                    d.detector, d.score, d.market,
+                )
+                continue
             score = min(max(d.score, 0.0), 1.0)
             if score > out.get(d.detector, 0.0):
                 out[d.detector] = score

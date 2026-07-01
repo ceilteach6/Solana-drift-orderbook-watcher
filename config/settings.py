@@ -97,12 +97,68 @@ class Settings:
     run_duration_sec: float = 0.0
 
 
+class SettingsError(ValueError):
+    """Raised when the loaded configuration is out of range or inconsistent."""
+
+
+def _validate(settings: "Settings") -> "Settings":
+    """Fail fast on config that would otherwise misbehave deep in the pipeline.
+
+    Bad values here don't raise where they're used (a stray ``UPDATE_FREQUENCY_MS=0``
+    would just busy-loop hammering the RPC; a smoothing alpha outside [0, 1] silently
+    produces a meaningless EMA); by the time symptoms show up they're hard to trace
+    back to the .env typo that caused them. Catching it once at startup, with the
+    offending key named in the message, is cheaper than debugging each symptom.
+    """
+    errors: list[str] = []
+
+    def check(condition: bool, message: str) -> None:
+        if not condition:
+            errors.append(message)
+
+    check(settings.update_frequency_ms > 0, "UPDATE_FREQUENCY_MS must be > 0")
+    check(settings.orderbook_depth > 0, "ORDERBOOK_DEPTH must be > 0")
+    check(settings.markets, "MARKETS must contain at least one market")
+
+    check(settings.repeated_min_count > 0, "REPEATED_MIN_COUNT must be > 0")
+    check(settings.layering_min_levels > 0, "LAYERING_MIN_LEVELS must be > 0")
+    check(settings.flicker_window_sec > 0, "FLICKER_WINDOW_SEC must be > 0")
+    check(settings.flicker_min_events > 0, "FLICKER_MIN_EVENTS must be > 0")
+    check(settings.imbalance_min_levels > 0, "IMBALANCE_MIN_LEVELS must be > 0")
+    check(settings.spoof_window_sec > 0, "SPOOF_WINDOW_SEC must be > 0")
+
+    check(0.0 <= settings.imbalance_min_ratio <= 1.0, "IMBALANCE_MIN_RATIO must be in [0, 1]")
+    check(0.0 <= settings.spoof_pull_fraction <= 1.0, "SPOOF_PULL_FRACTION must be in [0, 1]")
+
+    check(0.0 < settings.risk_smoothing <= 1.0, "RISK_SMOOTHING (EMA alpha) must be in (0, 1]")
+    check(0.0 <= settings.risk_clear_threshold <= 1.0, "RISK_CLEAR_THRESHOLD must be in [0, 1]")
+    check(0.0 <= settings.risk_alert_threshold <= 1.0, "RISK_ALERT_THRESHOLD must be in [0, 1]")
+    check(
+        settings.risk_clear_threshold < settings.risk_alert_threshold,
+        "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+        "(otherwise an alert can never clear)",
+    )
+    check(settings.risk_alert_cooldown_sec >= 0, "RISK_ALERT_COOLDOWN_SEC must be >= 0")
+
+    check(settings.healthcheck_interval_sec > 0, "HEALTHCHECK_INTERVAL_SEC must be > 0")
+    check(0.0 <= settings.alert_min_score <= 1.0, "ALERT_MIN_SCORE must be in [0, 1]")
+    check(0 < settings.dashboard_port <= 65535, "DASHBOARD_PORT must be a valid port number")
+    check(settings.run_duration_sec >= 0, "RUN_DURATION_SEC must be >= 0")
+
+    if errors:
+        raise SettingsError(
+            "Invalid configuration (" + str(len(errors)) + " issue(s)):\n  - "
+            + "\n  - ".join(errors)
+        )
+    return settings
+
+
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    return _validate(Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
@@ -142,7 +198,7 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
-    )
+    ))
 
 
 # Ready-to-use singleton.

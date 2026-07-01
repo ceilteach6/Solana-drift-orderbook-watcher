@@ -46,6 +46,9 @@ kész; csak az értékeket kell beírnod.
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
+| `config/settings.py` — induláskori validáció (`_validate`) | ✅ kész (új) |
+| `src/alert/webhook_alert.py` — korlátos szálpool (thread-exhaustion ellen) | ✅ kész (új) |
+| `src/risk/aggregator.py` — NaN/inf detektor-score védelem | ✅ kész (új) |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
 
 ---

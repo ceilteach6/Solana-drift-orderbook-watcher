@@ -76,3 +76,20 @@ def test_ema_smoothing_requires_sustained_signal():
     for t in range(1, 6):
         fired = agg.update("SOL-PERP", float(t), strong) or fired
     assert fired is not None
+
+
+def test_nan_score_is_ignored_not_propagated():
+    # A buggy detector returning NaN must not corrupt the noisy-OR (NaN
+    # comparisons are always False, so min/max clamping alone lets it through
+    # silently) or count towards the alert.
+    agg = RiskAggregator(make_settings(risk_alert_threshold=0.5))
+    out = agg.update("SOL-PERP", 0.0, [det("buggy", float("nan"))])
+    assert out is None
+    assert agg.score("SOL-PERP") == 0.0
+
+
+def test_nan_score_does_not_suppress_other_detectors():
+    agg = RiskAggregator(make_settings(risk_alert_threshold=0.5))
+    out = agg.update("SOL-PERP", 0.0, [det("buggy", float("nan")), det("a", 0.9)])
+    assert out is not None
+    assert round(out.details["risk"], 2) == 0.9
