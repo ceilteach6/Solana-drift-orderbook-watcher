@@ -89,15 +89,27 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: record_tick() is dispatched via
+        # asyncio.to_thread() off the watcher's hot path (see Watcher._persist),
+        # which can hand different calls to different worker threads. Writes
+        # stay strictly sequential (the watcher awaits one at a time), so this
+        # is safe despite sqlite3's default same-thread restriction.
+        self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # WAL lets a dashboard read while the watcher writes.
+        # WAL lets a dashboard read while the watcher writes. busy_timeout
+        # makes a writer retry instead of raising "database is locked"
+        # immediately when a reader briefly holds the file lock.
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
     # ------------------------------------------------------------------ #
-    def record_snapshot(self, snapshot) -> None:
+    # Each ``record_*`` call commits by default (safe standalone use, e.g.
+    # from selftest/examples). Pass ``commit=False`` to batch several writes
+    # from one caller into a single transaction/fsync — see ``record_tick``,
+    # which the watcher's hot path uses instead of three separate commits.
+    def record_snapshot(self, snapshot, *, commit: bool = True) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
         spread = (best_ask - best_bid) if (best_bid and best_ask) else None
@@ -115,9 +127,10 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
-    def record_detections(self, ts: float, detections) -> None:
+    def record_detections(self, ts: float, detections, *, commit: bool = True) -> None:
         """Record detections, stamped with the snapshot timestamp."""
         rows = [
             (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
@@ -130,13 +143,27 @@ class SQLiteStore(Store):
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
-    def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
+    def record_risk(
+        self, market: str, ts: float, score: float, mid=None, *, commit: bool = True
+    ) -> None:
         self._conn.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
+        if commit:
+            self._conn.commit()
+
+    def record_tick(self, market, snapshot, detections, risk=None, *, persist_snapshot=False) -> None:
+        """Write one tick's worth of rows (snapshot/detections/risk) as a
+        single transaction, instead of one fsync per table per tick."""
+        if persist_snapshot:
+            self.record_snapshot(snapshot, commit=False)
+        self.record_detections(snapshot.timestamp, detections, commit=False)
+        if risk is not None:
+            self.record_risk(market, snapshot.timestamp, risk, snapshot.mid, commit=False)
         self._conn.commit()
 
     # ------------------------------------------------------------------ #

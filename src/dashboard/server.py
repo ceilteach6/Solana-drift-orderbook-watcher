@@ -29,6 +29,7 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
+_MAX_LIMIT = 5000
 
 
 def _make_handler(db_path: str):
@@ -66,6 +67,9 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            if limit <= 0:
+                return self._send_json({"error": "limit must be positive"}, 400)
+            limit = min(limit, _MAX_LIMIT)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
@@ -108,6 +112,12 @@ def run_dashboard(settings) -> int:
     server = ThreadingHTTPServer(
         (settings.dashboard_host, settings.dashboard_port), handler
     )
+    # ThreadingHTTPServer spawns a non-daemon thread per request by default,
+    # and server_close() below only closes the listening socket — it doesn't
+    # join outstanding request threads. Under concurrent load, a Ctrl+C could
+    # hang the process waiting on in-flight handlers still mid-query. Daemon
+    # threads are killed automatically when the process exits instead.
+    server.daemon_threads = True
     url = f"http://{settings.dashboard_host}:{settings.dashboard_port}"
     print(f"📊 Dashboard on {url}  (DB: {settings.db_path})")
     print("   Press Ctrl+C to stop.")

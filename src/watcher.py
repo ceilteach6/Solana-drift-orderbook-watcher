@@ -26,6 +26,19 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 
+def history_length(settings) -> int:
+    """How many snapshots to retain per market.
+
+    Must cover the longest lookback window any detector scans via
+    ``history`` (currently flicker and spoof-pull) at the configured poll
+    interval, plus a small safety margin — otherwise the deque silently
+    evicts snapshots a detector still expects to see.
+    """
+    interval = max(settings.update_frequency_ms / 1000, 0.001)
+    widest_window = max(settings.flicker_window_sec, settings.spoof_window_sec)
+    return max(8, int(widest_window / interval) + 4)
+
+
 class Watcher:
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -36,9 +49,7 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
-        interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        history_len = history_length(settings)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }
@@ -133,20 +144,22 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        await self._persist(market, snapshot, detections)
 
-    def _persist(self, market: str, snapshot, detections) -> None:
+    async def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
             return
         try:
-            if self.settings.persist_snapshots:
-                self.store.record_snapshot(snapshot)
-            self.store.record_detections(snapshot.timestamp, detections)
-            if self.aggregator is not None:
-                self.store.record_risk(
-                    market, snapshot.timestamp,
-                    self.aggregator.score(market), snapshot.mid,
-                )
+            risk = self.aggregator.score(market) if self.aggregator is not None else None
+            # record_tick() commits (an fsync) synchronously; run it off the
+            # event loop so a slow disk/lock doesn't stall every other
+            # market's polling, health-checks, and alert delivery for the
+            # duration of the write.
+            await asyncio.to_thread(
+                self.store.record_tick,
+                market, snapshot, detections, risk,
+                persist_snapshot=self.settings.persist_snapshots,
+            )
         except Exception:
             logger.exception("Storage write failed for %s", market)
 

@@ -61,7 +61,14 @@ def cluster_sizes(sizes, tolerance: float) -> list[_Cluster]:
     """Greedily group near-equal sizes.
 
     Two sizes belong together when ``abs(a - b) <= tolerance * max(a, b)``
-    (relative tolerance). Returns clusters sorted by descending count.
+    (relative tolerance), measured against the cluster's *anchor* — the first
+    (smallest, since sizes are processed in ascending order) member — rather
+    than a running mean. A running mean lets a cluster's representative drift
+    away from where matching started, so a size could join or be rejected
+    based on prior members it was never itself compared against; anchoring
+    keeps membership deterministic and independent of how many members a
+    cluster has already accumulated. Returns clusters sorted by descending
+    count.
     """
     clusters: list[_Cluster] = []
     for s in sorted(float(x) for x in sizes):
@@ -69,7 +76,6 @@ def cluster_sizes(sizes, tolerance: float) -> list[_Cluster]:
         for c in clusters:
             if abs(s - c.rep) <= tolerance * max(s, c.rep, 1e-9):
                 c.sizes.append(s)
-                c.rep = sum(c.sizes) / len(c.sizes)
                 placed = True
                 break
         if not placed:
