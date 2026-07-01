@@ -95,6 +95,24 @@ cp config.example.env .env
 python main.py
 ```
 
+### Going live (non-simulated)
+Without `driftpy` or a reachable RPC the watcher falls back to a **synthetic
+demo feed** (it warns loudly). To watch the real market:
+
+1. Use a virtualenv (`python -m venv .venv && . .venv/bin/activate`) — the
+   Debian/Ubuntu system Python fails building some driftpy dependencies —
+   then `pip install -r requirements.txt`.
+2. Set `RPC_URL` in `.env` (free Helius key recommended; the public endpoint
+   rate-limits the DLOB websocket subscriptions).
+3. Verify everything before starting:
+   ```bash
+   python main.py --preflight
+   ```
+   It checks Python/driftpy/RPC reachability/config and prints a fix hint for
+   every failure.
+4. Set `FEED_MODE=live` so a feed failure stops the watcher instead of
+   silently switching to demo data, then run `python main.py`.
+
 ### Self-test (no network)
 Verify every detector fires on a known manipulation pattern — useful before
 going live with a real RPC:
@@ -179,6 +197,23 @@ class MyDetector(BaseDetector):
 ```
 
 Then register it in `watcher.py`. That's it.
+
+### Adding another venue (Phoenix, OpenBook, ...)
+
+Everything downstream of the collector (detectors, risk, storage, dashboard,
+replay) works on the abstract `OrderbookSnapshot` — only the collector knows
+about Drift. To watch another Solana orderbook venue, implement the
+`OrderbookFeed` interface for it and register the factory in
+`src/collector/orderbook_feed.py`:
+
+```python
+VENUE_FEEDS = {
+    "drift": DriftOrderbookFeed,
+    "phoenix": PhoenixOrderbookFeed,   # your new collector
+}
+```
+
+Then address its markets with a venue prefix: `MARKETS=SOL-PERP,phoenix:SOL/USDC`.
 
 ---
 

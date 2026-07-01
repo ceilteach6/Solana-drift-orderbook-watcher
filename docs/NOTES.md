@@ -29,6 +29,20 @@ kész; csak az értékeket kell beírnod.
 > Ha új külső API-t/linket akarsz bővíteni: szólj, felveszem ide és bekötöm a
 > kódba env-kulcsként — te csak az értéket adod meg.
 
+### Élesítés (nem szimulált mód) — státusz és teendők
+
+- **Kódoldalról minden kész**: `python main.py --preflight` végigellenőrzi, mi
+  hiányzik (driftpy, RPC-elérés, config), javítási tippekkel. Élesben állítsd
+  be: `FEED_MODE=live` — így feed-hiba esetén leáll, nem vált át csendben
+  szimulált adatra.
+- **A te részed**: `RPC_URL` (ingyenes Helius kulcs ajánlott — a publikus
+  mainnet RPC rate-limitelné a DLOB websocketeket).
+- **Hol fusson**: saját gépen/VPS-en, **venv-ben** (a Debian/Ubuntu rendszer-
+  Pythonnal a driftpy néhány függősége nem fordul le; venv-ben `driftpy
+  0.8.89` rendben települ, az API-felület egyezik a kódéval). A Claude Code
+  felhős sandboxból a Solana RPC hálózati szabályzat miatt nem érhető el
+  (403) — ott csak akkor menne, ha a környezet network policy-jét megnyitod.
+
 ---
 
 ## 2. 🛠️ A CLAUDE része — kód / plumbing (státusz)
@@ -37,6 +51,8 @@ kész; csak az értékeket kell beírnod.
 |---|---|
 | `config/settings.py` — env-alapú konfiguráció | ✅ kész |
 | `src/collector/` — L2 modell + driftpy DLOB feed + szintetikus fallback | ✅ kész |
+| `src/collector/` — multi-venue router + venue-registry (`venue:MARKET`, `FEED_MODE`) | ✅ kész (új) |
+| `src/preflight.py` — go-live előellenőrzés (`--preflight`) | ✅ kész (új) |
 | `src/detector/` — base + repeated_size, layering, flicker | ✅ kész |
 | `src/detector/imbalance.py` — orderbook-imbalance detektor | ✅ kész |
 | `src/alert/` — dispatcher + console + webhook (Telegram/Discord) csonk | ✅ kész |
@@ -44,7 +60,7 @@ kész; csak az értékeket kell beírnod.
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész |
-| `src/replay/` — replay/backtesting + paraméter-sweep (`--replay`) | ✅ kész (új) |
+| `src/replay/` — replay/backtesting + paraméter-sweep (`--replay`) | ✅ kész |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 
@@ -89,7 +105,9 @@ nem avatkozik be. Prioritás szerinti felépítés:
   *(kész)*
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
-1. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
+1. **Multi-venue collectorok (egész Solana orderbook)** — a plumbing (router +
+   venue-registry + `venue:MARKET` címzés) **kész**; ami nyitott: konkrét új
+   venue collector (Phoenix/OpenBook) implementálása — lásd lent.
 2. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
 3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
@@ -106,8 +124,10 @@ A kérdés: bővíthető-e a projekt az egész Solana hálózatra? Két értelem
 risk-aggregátor, a tárolás, a dashboard és az alert **mind az absztrakt
 `OrderbookSnapshot`-on dolgoznak** — nem tudnak Driftről. Csak a
 `src/collector/` Drift-specifikus. Új venue (Phoenix, OpenBook, Zeta, Mango) =
-**új collector**, ami ugyanabba a pipeline-ba táplál. Kis-közepes munka, mert az
-absztrakció már megvan. Ez a `MARKETS` és a collector-réteg bővítése.
+**új collector**, ami ugyanabba a pipeline-ba táplál. *A plumbing már kész:*
+a `MultiVenueFeed` router a `MARKETS`-beli `venue:MARKET` címkék alapján oszt
+szét a collectorok közt; új venue = egy `OrderbookFeed`-implementáció + egy
+sor a `VENUE_FEEDS` registry-ben (`src/collector/orderbook_feed.py`).
 
 **B) Teljes lánc / minden tranzakció — ÚJ ÁG.** Ez már nem orderbook-
 mikrostruktúra, hanem általános on-chain analitika (Geyser/tranzakció-stream,

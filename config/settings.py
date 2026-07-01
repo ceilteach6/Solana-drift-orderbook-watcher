@@ -81,6 +81,10 @@ class Settings:
     # not mutating a mutable object held by it — a list here would let
     # ``settings.markets.append(...)`` silently corrupt the "immutable" config.
     markets: tuple[str, ...] = field(default_factory=tuple)
+    # auto: prefer each venue's live feed, fall back to synthetic on failure.
+    # live: a feed failure is fatal — never silently watch demo data.
+    # synthetic: demo mode, no network.
+    feed_mode: str = "auto"
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
     snapshot_timeout_sec: float = 5.0
@@ -132,6 +136,10 @@ class Settings:
     run_duration_sec: float = 0.0
 
     def __post_init__(self) -> None:
+        if self.feed_mode not in ("auto", "live", "synthetic"):
+            raise ValueError(
+                f"FEED_MODE must be auto, live, or synthetic (got {self.feed_mode!r})"
+            )
         # Hysteresis in RiskAggregator requires clear < alert, or the
         # "alerting" state never clears and cooldown becomes the only gate.
         if self.risk_clear_threshold >= self.risk_alert_threshold:
@@ -155,6 +163,7 @@ def load_settings() -> Settings:
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
         markets=markets or ("SOL-PERP",),
+        feed_mode=_get_str("FEED_MODE", "auto").lower(),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         snapshot_timeout_sec=_get_float("SNAPSHOT_TIMEOUT_SEC", 5.0),

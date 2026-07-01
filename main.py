@@ -14,6 +14,9 @@ Run:
 Self-test (no network; verifies every detector fires on a known pattern):
   python main.py --selftest
 
+Go-live preflight (checks driftpy, RPC reachability, config — with hints):
+  python main.py --preflight
+
 Inspect the stored time-series (row counts + recent detections):
   python main.py --dbstats
 
@@ -42,6 +45,11 @@ if __name__ == "__main__":
         from src.selftest import selftest_main
 
         sys.exit(selftest_main(settings))
+
+    if "--preflight" in sys.argv[1:]:
+        from src.preflight import preflight_main
+
+        sys.exit(preflight_main(settings))
 
     if "--dbstats" in sys.argv[1:]:
         from src.storage import SQLiteStore

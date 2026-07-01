@@ -166,6 +166,7 @@ class Watcher:
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
         print(f"   Markets   : {', '.join(self.settings.markets)}")
+        print(f"   Feed      : {self.settings.feed_mode}")
         print(f"   Detectors : {', '.join(d.name for d in self.detectors)}")
         mode = "risk-aggregated" if self.aggregator else "raw per-detection"
         print(f"   Mode      : {mode}")

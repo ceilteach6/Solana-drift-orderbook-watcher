@@ -235,20 +235,117 @@ class SyntheticOrderbookFeed(OrderbookFeed):
 
 
 # --------------------------------------------------------------------------- #
+# Venues
+# --------------------------------------------------------------------------- #
+DEFAULT_VENUE = "drift"
+
+# Venue registry: name -> feed factory (called with settings, must return an
+# OrderbookFeed). Adding a venue (Phoenix, OpenBook, Zeta, ...) = implement
+# OrderbookFeed for it and register it here; the detector/risk/storage/
+# dashboard pipeline is venue-agnostic and needs no changes.
+VENUE_FEEDS: dict[str, type] = {
+    "drift": DriftOrderbookFeed,
+}
+
+
+def parse_market(spec: str) -> tuple[str, str]:
+    """Split a configured market spec into ``(venue, market name)``.
+
+    A bare name (``SOL-PERP``) belongs to the default venue; a prefixed spec
+    (``phoenix:SOL/USDC``) routes to another venue's collector.
+    """
+    venue, sep, name = spec.partition(":")
+    if not sep:
+        return DEFAULT_VENUE, spec.strip()
+    venue, name = venue.strip().lower(), name.strip()
+    if not venue or not name:
+        raise ValueError(f"Invalid market spec {spec!r}; expected 'venue:MARKET'")
+    return venue, name
+
+
+class MultiVenueFeed(OrderbookFeed):
+    """Routes each configured market to its venue's feed.
+
+    ``FEED_MODE`` governs what happens when a venue's real feed can't connect:
+
+    - ``auto``: fall back to the synthetic feed for that venue (with a warning).
+    - ``live``: raise — never silently substitute demo data for a live watch.
+    - ``synthetic``: don't even try the real feeds (demo mode, no network).
+    """
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self._feeds: dict[str, OrderbookFeed] = {}  # venue -> connected feed
+        self._synthetic: SyntheticOrderbookFeed | None = None
+        self._routes: dict[str, tuple[OrderbookFeed, str]] = {}  # spec -> (feed, query)
+
+    async def connect(self) -> None:
+        specs = {spec: parse_market(spec) for spec in self.settings.markets}
+        unknown = {venue for venue, _ in specs.values()} - VENUE_FEEDS.keys()
+        if unknown:  # a typo, even in demo mode — fail loud at startup
+            raise ValueError(
+                f"Unknown venue(s) {sorted(unknown)} in MARKETS; "
+                f"known venues: {sorted(VENUE_FEEDS)}"
+            )
+        for spec, (venue, name) in specs.items():
+            feed = await self._venue_feed(venue)
+            # The synthetic fallback is queried with the full spec, so two
+            # venues' like-named markets don't share one random-walk state.
+            query = spec if feed is self._synthetic else name
+            self._routes[spec] = (feed, query)
+
+    async def _venue_feed(self, venue: str) -> OrderbookFeed:
+        if venue in self._feeds:
+            return self._feeds[venue]
+        feed: OrderbookFeed | None = None
+        if self.settings.feed_mode != "synthetic":
+            try:
+                feed = VENUE_FEEDS[venue](self.settings)
+                await feed.connect()
+            except Exception as exc:  # ImportError, connection errors, etc.
+                if self.settings.feed_mode == "live":
+                    raise RuntimeError(
+                        f"FEED_MODE=live: the {venue} feed failed to connect "
+                        f"({exc}); refusing to fall back to synthetic data"
+                    ) from exc
+                logger.warning("%s feed unavailable (%s); falling back.", venue, exc)
+                feed = None
+        if feed is None:
+            if self._synthetic is None:
+                self._synthetic = SyntheticOrderbookFeed(self.settings)
+                await self._synthetic.connect()
+            feed = self._synthetic
+        self._feeds[venue] = feed
+        return feed
+
+    async def get_snapshot(self, market: str) -> OrderbookSnapshot | None:
+        feed, query = self._routes[market]
+        snapshot = await feed.get_snapshot(query)
+        if snapshot is not None and snapshot.market != market:
+            # Downstream (history, storage, alerts) keys on the configured
+            # spec, not the venue-local name.
+            snapshot.market = market
+        return snapshot
+
+    async def close(self) -> None:
+        closed: set[int] = set()
+        for feed in self._feeds.values():
+            if id(feed) in closed:
+                continue
+            closed.add(id(feed))
+            await feed.close()
+
+
+# --------------------------------------------------------------------------- #
 # Factory
 # --------------------------------------------------------------------------- #
 async def create_feed(settings) -> OrderbookFeed:
-    """Return a connected feed, preferring the real Drift feed.
+    """Return a connected feed routing every configured market to its venue.
 
-    Falls back to the synthetic feed (with a clear warning) when driftpy is
-    missing or the connection cannot be established.
+    ``FEED_MODE=auto`` (default) prefers each venue's real feed and falls back
+    to the synthetic one; ``live`` makes a connection failure fatal;
+    ``synthetic`` forces demo mode.
     """
-    try:
-        feed: OrderbookFeed = DriftOrderbookFeed(settings)
-        await feed.connect()
-        return feed
-    except Exception as exc:  # ImportError, connection errors, etc.
-        logger.warning("Real Drift feed unavailable (%s); falling back.", exc)
-        synthetic = SyntheticOrderbookFeed(settings)
-        await synthetic.connect()
-        return synthetic
+    feed = MultiVenueFeed(settings)
+    await feed.connect()
+    return feed
