@@ -36,9 +36,12 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover every detector's lookback
+        # window (flicker and spoof-pull both use windowed history; sizing
+        # from flicker alone silently truncated spoof-pull's longer window).
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        lookback_sec = max(settings.flicker_window_sec, settings.spoof_window_sec)
+        history_len = max(8, int(lookback_sec / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }
@@ -56,14 +59,20 @@ class Watcher:
         )
         self._banner()
         if self.store is not None:
-            self.store.connect()
+            try:
+                await asyncio.to_thread(self.store.connect)
+            except Exception:
+                # One bad subsystem (e.g. a permissions error creating the db
+                # directory) shouldn't take down the whole watcher.
+                logger.exception("Storage init failed; disabling persistence")
+                self.store = None
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
         finally:
             await self.feed.close()
             if self.store is not None:
-                self.store.close()
+                await asyncio.to_thread(self.store.close)
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000
@@ -133,11 +142,16 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        await self._persist(market, snapshot, detections)
 
-    def _persist(self, market: str, snapshot, detections) -> None:
+    async def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
             return
+        # A commit does a blocking fsync; running it off the event loop keeps
+        # one market's write from stalling polling for every other market.
+        await asyncio.to_thread(self._persist_sync, market, snapshot, detections)
+
+    def _persist_sync(self, market: str, snapshot, detections) -> None:
         try:
             if self.settings.persist_snapshots:
                 self.store.record_snapshot(snapshot)

@@ -79,6 +79,14 @@ def _levels_to_json(levels) -> str:
     return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
 
 
+def _safe_json(value) -> str:
+    """Never let one bad detail (e.g. a non-serializable object) drop a write."""
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return json.dumps({"repr": repr(value)})
+
+
 class SQLiteStore(Store):
     def __init__(self, db_path: str = "data/watcher.db") -> None:
         self.db_path = db_path
@@ -89,7 +97,11 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: writes are run via asyncio.to_thread, which
+        # may hand consecutive calls to different worker threads. Writes stay
+        # strictly sequential (each call is awaited before the next starts),
+        # so this is safe despite sqlite3's default single-thread restriction.
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -120,7 +132,7 @@ class SQLiteStore(Store):
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
         rows = [
-            (d.market, ts, d.detector, d.score, d.message, json.dumps(d.details))
+            (d.market, ts, d.detector, d.score, d.message, _safe_json(d.details))
             for d in detections
         ]
         if not rows:

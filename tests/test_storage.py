@@ -111,3 +111,36 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_record_detections_survives_non_serializable_details(tmp_path):
+    # A non-JSON-serializable detail (e.g. an object a future detector
+    # accidentally puts in `details`) must not drop the whole write.
+    store = make_store(tmp_path)
+    bad = det("imbalance", 0.9)
+    bad.details = {"obj": object()}
+    store.record_detections(1.0, [bad, det("flicker", 0.7)])
+    assert store.counts()["detections"] == 2
+    store.close()
+
+
+def test_writes_from_a_different_thread(tmp_path):
+    # Watcher writes run via asyncio.to_thread, which may hand consecutive
+    # calls to different worker threads; the connection must allow that.
+    import threading
+
+    store = make_store(tmp_path)
+    errors = []
+
+    def write():
+        try:
+            store.record_risk("SOL-PERP", 1.0, 0.5)
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    t = threading.Thread(target=write)
+    t.start()
+    t.join()
+    assert not errors
+    assert store.counts()["risk"] == 1
+    store.close()

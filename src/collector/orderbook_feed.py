@@ -100,15 +100,28 @@ class DriftOrderbookFeed(OrderbookFeed):
             await self._stack.close()
 
 
-def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
-    # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
-    # helpers usually expose ``price`` / ``size`` attributes already; we coerce
-    # defensively so version differences don't crash the watcher.
+try:
+    # driftpy's L2 levels carry raw fixed-point integers (see L2Level in
+    # driftpy/dlob/orderbook_levels.py: price/size are plain ``int``, no
+    # descaling). Import the real precision constants when available so we
+    # track driftpy if it ever changes them; fall back to the documented
+    # values (PRICE_PRECISION=1e6, BASE_PRECISION=1e9) so this module stays
+    # driftpy-optional.
+    from driftpy.constants.numeric_constants import (  # type: ignore
+        BASE_PRECISION as _BASE_PRECISION,
+        PRICE_PRECISION as _PRICE_PRECISION,
+    )
+except ImportError:  # pragma: no cover - exercised only without driftpy installed
+    _PRICE_PRECISION = 1_000_000
+    _BASE_PRECISION = 1_000_000_000
+
+
+def _to_float(value, precision: int) -> float:
+    """Descale a driftpy fixed-point integer (or coerce defensively)."""
     try:
-        return float(value)
+        return float(value) / precision
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        return float(getattr(value, "value", 0)) / precision
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
@@ -119,11 +132,14 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            out.append(Level(
+                _to_float(price, _PRICE_PRECISION),
+                _to_float(size, _BASE_PRECISION),
+            ))
         return out
 
-    bids = levels(getattr(l2, "bids", None) or [])
-    asks = levels(getattr(l2, "asks", None) or [])
+    bids = sorted(levels(getattr(l2, "bids", None) or []), key=lambda lvl: lvl.price, reverse=True)
+    asks = sorted(levels(getattr(l2, "asks", None) or []), key=lambda lvl: lvl.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

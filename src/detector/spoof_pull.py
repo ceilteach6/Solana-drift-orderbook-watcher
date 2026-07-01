@@ -45,7 +45,12 @@ class SpoofPullDetector(BaseDetector):
         if not mid_now or not mid_then:
             return []
         price_move = (mid_now - mid_then) / mid_then
-        if abs(price_move) < self.settings.spoof_min_price_move:
+        min_move = self.settings.spoof_min_price_move
+        if min_move <= 0:
+            # Settings.validate() rejects this at startup; guard here too so a
+            # Settings built by hand (e.g. in tests) can't hit a ZeroDivisionError.
+            return []
+        if abs(price_move) < min_move:
             return []
 
         previous = prior[-1]  # the snapshot just before the current one
@@ -64,7 +69,7 @@ class SpoofPullDetector(BaseDetector):
                 continue  # wall is still (mostly) there — not pulled
 
             pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
-            move_factor = min(1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move))
+            move_factor = min(1.0, abs(price_move) / (2 * min_move))
             score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
 
             detections.append(
