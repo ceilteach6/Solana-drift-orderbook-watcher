@@ -104,11 +104,18 @@ def _to_float(value) -> float:
     """driftpy L2 levels carry scaled integers; normalize to floats."""
     # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
     # helpers usually expose ``price`` / ``size`` attributes already; we coerce
-    # defensively so version differences don't crash the watcher.
+    # defensively so version differences don't crash the watcher. Both the
+    # direct cast and the ``.value`` fallback are guarded — an unexpected
+    # object shape (e.g. a nested non-numeric ``.value``) degrades to 0.0
+    # instead of raising, so one malformed level can't take down the feed.
     try:
         return float(value)
     except (TypeError, ValueError):
+        pass
+    try:
         return float(getattr(value, "value", 0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:

@@ -38,6 +38,18 @@ def _get_str(name: str, default: str) -> str:
     return raw.strip() if raw not in (None, "") else default
 
 
+class ConfigError(ValueError):
+    """Raised when environment configuration is invalid at startup.
+
+    Several detector thresholds (see ``Settings.__post_init__``) are used as
+    divisors in score calculations. Validating them once here means a bad
+    ``.env`` value fails loudly at startup instead of raising deep inside a
+    detector on every tick (where it would otherwise be silently swallowed by
+    the per-detector try/except in ``Watcher._tick`` and just disable that
+    detector).
+    """
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration."""
@@ -95,6 +107,44 @@ class Settings:
 
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        errors: list[str] = []
+
+        # These are used as divisors (score = count / (threshold * 2)) in the
+        # repeated-size, layering and flicker detectors — zero or negative
+        # would raise ZeroDivisionError on every matching tick.
+        for value, env_name in (
+            (self.repeated_min_count, "REPEATED_MIN_COUNT"),
+            (self.layering_min_levels, "LAYERING_MIN_LEVELS"),
+            (self.flicker_min_events, "FLICKER_MIN_EVENTS"),
+        ):
+            if value < 1:
+                errors.append(f"{env_name} must be >= 1 (got {value})")
+
+        # Divides price_move in the spoof-pull detector; also disables the
+        # "no move yet" early-out (abs(x) < 0 is never true) when <= 0.
+        if self.spoof_min_price_move <= 0:
+            errors.append(
+                f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move})"
+            )
+
+        if self.orderbook_depth < 1:
+            errors.append(f"ORDERBOOK_DEPTH must be >= 1 (got {self.orderbook_depth})")
+
+        if self.update_frequency_ms < 1:
+            errors.append(
+                f"UPDATE_FREQUENCY_MS must be >= 1 (got {self.update_frequency_ms})"
+            )
+
+        if not 0 < self.risk_smoothing <= 1:
+            errors.append(f"RISK_SMOOTHING must be in (0, 1] (got {self.risk_smoothing})")
+
+        if errors:
+            raise ConfigError(
+                "Invalid configuration in .env / environment:\n  - "
+                + "\n  - ".join(errors)
+            )
 
 
 def load_settings() -> Settings:
