@@ -36,9 +36,15 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover the *longest* lookback any
+        # detector reads — currently flicker (flicker_window_sec) and
+        # spoof_pull (spoof_window_sec, default 10s vs flicker's 5s). Sizing
+        # this from flicker_window_sec alone silently truncates spoof_pull's
+        # window: its baseline mid-price comparison would always be capped at
+        # whatever flicker needs, understating price moves with no error.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        lookback_sec = max(settings.flicker_window_sec, settings.spoof_window_sec)
+        history_len = max(8, int(lookback_sec / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }

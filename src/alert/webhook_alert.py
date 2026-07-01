@@ -17,12 +17,45 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import urllib.request
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# Fixed-size pool of daemon worker threads shared by every WebhookAlert
+# instance. A raw "one thread per alert" approach has no ceiling: a noisy
+# market tripping several detectors across several markets every tick can
+# spawn dozens of concurrent threads/sockets per second indefinitely. Workers
+# are daemons (unlike a ThreadPoolExecutor's, which are joined at interpreter
+# exit) so a slow in-flight delivery never delays shutdown; extra work simply
+# queues instead of spawning more OS threads.
+_MAX_WORKERS = 4
+
+
+class _WebhookWorkerPool:
+    def __init__(self, max_workers: int) -> None:
+        self._queue: "queue.Queue[tuple]" = queue.Queue()
+        for i in range(max_workers):
+            threading.Thread(
+                target=self._run, daemon=True, name=f"webhook-alert-{i}"
+            ).start()
+
+    def _run(self) -> None:
+        while True:
+            fn, args = self._queue.get()
+            try:
+                fn(*args)
+            except Exception:
+                logger.exception("Webhook worker task failed")
+
+    def submit(self, fn, *args) -> None:
+        self._queue.put((fn, args))
+
+
+_POOL = _WebhookWorkerPool(_MAX_WORKERS)
 
 
 class WebhookAlert(Alert):
@@ -38,13 +71,12 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared worker pool — bounded concurrency,
+        never blocks the event loop."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _POOL.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

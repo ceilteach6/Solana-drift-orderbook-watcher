@@ -113,6 +113,13 @@ class Settings:
 
         if self.repeated_min_count < 2:
             errors.append("REPEATED_MIN_COUNT must be >= 2")
+        if self.repeated_size_tolerance <= 0:
+            # cluster_sizes() uses this as a multiplicative tolerance; <= 0
+            # collapses every comparison to float equality, which silently
+            # turns every level into its own singleton cluster — a total,
+            # silent kill of both repeated_size and layering (they share
+            # this setting), never a raised error.
+            errors.append("REPEATED_SIZE_TOLERANCE must be > 0")
         if self.layering_min_levels < 2:
             errors.append("LAYERING_MIN_LEVELS must be >= 2")
         if self.flicker_window_sec <= 0:

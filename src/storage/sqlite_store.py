@@ -92,8 +92,12 @@ class SQLiteStore(Store):
         # check_same_thread=False: writes are dispatched via asyncio.to_thread
         # (see Watcher._tick) so they don't block the event loop, which means
         # this connection is used from whichever thread-pool worker picks up
-        # the call — never the thread that created it. Safe here because the
-        # watcher always awaits one write at a time, so access stays serial.
+        # the call — never the thread that created it. The dashboard server
+        # (see src/dashboard/server.py) shares one connection across
+        # ThreadingHTTPServer's per-request threads for the same reason.
+        # Both callers serialize their own access (the watcher awaits one
+        # write at a time; the dashboard holds an explicit lock), so a single
+        # connection is safe despite the relaxed thread check.
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
