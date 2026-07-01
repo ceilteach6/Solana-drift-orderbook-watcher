@@ -144,14 +144,19 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        await self._persist(market, snapshot, detections)
 
-    def _persist(self, market: str, snapshot, detections) -> None:
+    async def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
             return
         try:
             risk = self.aggregator.score(market) if self.aggregator is not None else None
-            self.store.record_tick(
+            # record_tick() commits (an fsync) synchronously; run it off the
+            # event loop so a slow disk/lock doesn't stall every other
+            # market's polling, health-checks, and alert delivery for the
+            # duration of the write.
+            await asyncio.to_thread(
+                self.store.record_tick,
                 market, snapshot, detections, risk,
                 persist_snapshot=self.settings.persist_snapshots,
             )

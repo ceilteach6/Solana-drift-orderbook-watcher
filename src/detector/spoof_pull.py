@@ -106,9 +106,21 @@ class SpoofPullDetector(BaseDetector):
         return detections
 
     def _find_wall(self, levels):
-        sizes = [lvl.size for lvl in levels if lvl.size > 0]
-        if len(sizes) < 2:
+        nonzero = [lvl for lvl in levels if lvl.size > 0]
+        if not nonzero:
             return None
+        if len(nonzero) == 1:
+            # A single resting level *is* the entire visible side — there's no
+            # peer to size it "relative to", but that's not a reason to call
+            # it not-a-wall: it disappearing is exactly the "wall pulled"
+            # signal, arguably clearer than on a deep book. Skipping this case
+            # (the old behavior) silently disabled spoof-pull detection
+            # whenever a side thinned out to one level — precisely the
+            # sparse-liquidity conditions where a single large wall stands out
+            # most and is easiest to spoof.
+            lvl = nonzero[0]
+            return (round(lvl.price, _PRICE_DECIMALS), lvl.size)
+        sizes = [lvl.size for lvl in nonzero]
         median = statistics.median(sizes)
         if median <= 0:
             return None

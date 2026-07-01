@@ -281,5 +281,29 @@ def test_spoof_pull_needs_history():
     assert det.analyze(_prior_with_bid_wall(), []) == []
 
 
+def test_spoof_pull_fires_on_a_lone_resting_level_pulled():
+    # Regression: _find_wall required >= 2 levels to compute a median to
+    # compare against, so a side with exactly one resting level could never
+    # be classified as a wall — even though that single level *is* the whole
+    # visible side, and its disappearance alongside a price move is exactly
+    # the spoof-pull signature. This silently disabled detection on thin,
+    # one-sided books.
+    det = SpoofPullDetector(make_settings())
+    prior = snap(
+        bids=[(99.5, 50.0)],  # the only bid level
+        asks=[(100.1, 1.0), (100.2, 1.0)],
+        ts=0.0,
+    )
+    current = snap(
+        bids=[(100.2, 1.0)],  # 99.5 pulled; a new level appears elsewhere
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    detections = det.analyze(current, [prior])
+    assert len(detections) == 1
+    assert detections[0].details["side"] == "bid"
+    assert detections[0].details["wall_size"] == 50.0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -89,7 +89,12 @@ class SQLiteStore(Store):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path, timeout=30.0)
+        # check_same_thread=False: record_tick() is dispatched via
+        # asyncio.to_thread() off the watcher's hot path (see Watcher._persist),
+        # which can hand different calls to different worker threads. Writes
+        # stay strictly sequential (the watcher awaits one at a time), so this
+        # is safe despite sqlite3's default same-thread restriction.
+        self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes. busy_timeout
         # makes a writer retry instead of raising "database is locked"

@@ -77,7 +77,10 @@ class Settings:
     keypair_path: str
 
     # --- Markets / feed ---
-    markets: list[str] = field(default_factory=list)
+    # A tuple, not a list: ``frozen=True`` only blocks reassigning the field,
+    # not mutating a mutable object held by it — a list here would let
+    # ``settings.markets.append(...)`` silently corrupt the "immutable" config.
+    markets: tuple[str, ...] = field(default_factory=tuple)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
     snapshot_timeout_sec: float = 5.0
@@ -145,13 +148,13 @@ class Settings:
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
-    markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
+    markets = tuple(m.strip() for m in markets_raw.split(",") if m.strip())
 
     return Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
-        markets=markets or ["SOL-PERP"],
+        markets=markets or ("SOL-PERP",),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
         snapshot_timeout_sec=_get_float("SNAPSHOT_TIMEOUT_SEC", 5.0),

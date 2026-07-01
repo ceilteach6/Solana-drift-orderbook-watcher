@@ -112,6 +112,12 @@ def run_dashboard(settings) -> int:
     server = ThreadingHTTPServer(
         (settings.dashboard_host, settings.dashboard_port), handler
     )
+    # ThreadingHTTPServer spawns a non-daemon thread per request by default,
+    # and server_close() below only closes the listening socket — it doesn't
+    # join outstanding request threads. Under concurrent load, a Ctrl+C could
+    # hang the process waiting on in-flight handlers still mid-query. Daemon
+    # threads are killed automatically when the process exits instead.
+    server.daemon_threads = True
     url = f"http://{settings.dashboard_host}:{settings.dashboard_port}"
     print(f"📊 Dashboard on {url}  (DB: {settings.db_path})")
     print("   Press Ctrl+C to stop.")
