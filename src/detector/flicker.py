@@ -47,7 +47,9 @@ class FlickerDetector(BaseDetector):
 
         best_key: tuple | None = None
         best_transitions = 0
-        for key in all_keys:
+        # Sorted so that ties (equally-flickering levels) resolve the same way
+        # on every run instead of depending on set iteration/hash order.
+        for key in sorted(all_keys):
             seq = [key in keys for keys in presence]
             transitions = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
             if transitions > best_transitions:

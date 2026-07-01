@@ -37,10 +37,11 @@ class Watcher:
         self._last_healthcheck: float = 0.0
 
         # Keep enough history per market to cover the flicker window.
-        interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        # (Settings.__post_init__ guarantees update_frequency_ms > 0.)
+        self._interval = settings.update_frequency_ms / 1000
+        self._history_len = max(8, int(settings.flicker_window_sec / self._interval) + 4)
         self._history: dict[str, deque] = {
-            market: deque(maxlen=history_len) for market in settings.markets
+            market: deque(maxlen=self._history_len) for market in settings.markets
         }
 
     @staticmethod
@@ -56,7 +57,11 @@ class Watcher:
         )
         self._banner()
         if self.store is not None:
-            self.store.connect()
+            # Writes run via asyncio.to_thread (see _tick), which doesn't
+            # guarantee the same worker thread across calls; access here is
+            # strictly sequential (always awaited before the next write), so
+            # this is safe without an additional lock.
+            self.store.connect(check_same_thread=False)
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
@@ -66,7 +71,7 @@ class Watcher:
                 self.store.close()
 
     async def _run_loop(self) -> None:
-        interval = self.settings.update_frequency_ms / 1000
+        interval = self._interval
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
@@ -115,7 +120,10 @@ class Watcher:
         if snapshot is None:
             return
 
-        history = self._history[market]
+        # setdefault rather than a plain lookup: robust to a market not present
+        # in the dict built at construction time (e.g. Settings assembled by a
+        # caller other than load_settings()).
+        history = self._history.setdefault(market, deque(maxlen=self._history_len))
         detections = []
         for detector in self.detectors:
             try:
@@ -133,11 +141,13 @@ class Watcher:
             # Raw mode: one alert per detection.
             self.alert.emit(detections)
 
-        self._persist(market, snapshot, detections)
+        if self.store is not None:
+            # sqlite3 calls block; run off the event loop so a slow disk/fsync
+            # doesn't stall other markets' ticks or the health-check timer.
+            await asyncio.to_thread(self._persist, market, snapshot, detections)
 
     def _persist(self, market: str, snapshot, detections) -> None:
-        if self.store is None:
-            return
+        """Blocking; call via ``asyncio.to_thread`` (only invoked when store is set)."""
         try:
             if self.settings.persist_snapshots:
                 self.store.record_snapshot(snapshot)

@@ -15,14 +15,22 @@ stdlib (urllib) — no extra dependency.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
-import threading
 import urllib.request
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# Shared, bounded pool for webhook delivery. A burst of alerts queues here
+# instead of spawning an unbounded number of OS threads/sockets — the queue
+# has no size limit, but concurrency (and therefore in-flight connections) is
+# capped.
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="webhook-alert"
+)
 
 
 class WebhookAlert(Alert):
@@ -38,13 +46,11 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared pool to avoid blocking the caller."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _EXECUTOR.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

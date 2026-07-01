@@ -100,30 +100,59 @@ class DriftOrderbookFeed(OrderbookFeed):
             await self._stack.close()
 
 
-def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
+_MISSING = object()
+
+
+def _to_float(value):
+    """driftpy L2 levels carry scaled integers; normalize to floats.
+
+    Returns ``_MISSING`` (rather than ``0.0``) when ``value`` can't be
+    coerced, so callers can drop the level instead of feeding detectors and
+    the stored time series a fake zero-price/zero-size level.
+    """
     # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
     # helpers usually expose ``price`` / ``size`` attributes already; we coerce
     # defensively so version differences don't crash the watcher.
+    if value is None:
+        return _MISSING
     try:
         return float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        raw = getattr(value, "value", _MISSING)
+        if raw is _MISSING:
+            return _MISSING
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return _MISSING
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
+    dropped = 0
+
     def levels(side) -> list[Level]:
+        nonlocal dropped
         out: list[Level] = []
         for lvl in side or []:
             price = getattr(lvl, "price", None)
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            price_f, size_f = _to_float(price), _to_float(size)
+            if price_f is _MISSING or size_f is _MISSING:
+                dropped += 1
+                continue
+            out.append(Level(price_f, size_f))
         return out
 
     bids = levels(getattr(l2, "bids", None) or [])
     asks = levels(getattr(l2, "asks", None) or [])
+    if dropped:
+        logger.warning(
+            "%s: dropped %d malformed L2 level(s) (unparseable price/size) — "
+            "check driftpy version compatibility",
+            market, dropped,
+        )
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

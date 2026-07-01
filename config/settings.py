@@ -96,6 +96,78 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Fail loudly at startup on nonsensical config instead of letting bad
+        values manifest later as silent misbehavior (frozen risk scores, dead
+        detectors) or crashes deep in a detector's math."""
+        if not self.markets:
+            raise ValueError("MARKETS must contain at least one market")
+        _require_positive("ORDERBOOK_DEPTH", self.orderbook_depth)
+        _require_positive("UPDATE_FREQUENCY_MS", self.update_frequency_ms)
+
+        _require_positive("REPEATED_MIN_COUNT", self.repeated_min_count)
+        _require_non_negative("REPEATED_SIZE_TOLERANCE", self.repeated_size_tolerance)
+        _require_positive("LAYERING_MIN_LEVELS", self.layering_min_levels)
+        _require_positive("FLICKER_WINDOW_SEC", self.flicker_window_sec)
+        _require_positive("FLICKER_MIN_EVENTS", self.flicker_min_events)
+        _require_ratio("IMBALANCE_MIN_RATIO", self.imbalance_min_ratio)
+        _require_positive("IMBALANCE_MIN_LEVELS", self.imbalance_min_levels)
+        _require_positive("SPOOF_WINDOW_SEC", self.spoof_window_sec)
+        _require_positive("SPOOF_WALL_RATIO", self.spoof_wall_ratio)
+        # Must be strictly positive: spoof_pull.py divides by 2 * this value.
+        _require_positive("SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move)
+        _require_ratio("SPOOF_PULL_FRACTION", self.spoof_pull_fraction)
+
+        # EMA alpha of 0 would freeze the smoothed score at its initial value
+        # forever (no signal could ever move it), silently disabling all
+        # risk-aggregated alerting. 1.0 (no memory) is valid.
+        if not (0 < self.risk_smoothing <= 1):
+            raise ValueError(
+                f"RISK_SMOOTHING must be in (0, 1] (got {self.risk_smoothing}); "
+                "0 would freeze the smoothed risk score forever."
+            )
+        _require_ratio("RISK_ALERT_THRESHOLD", self.risk_alert_threshold)
+        _require_ratio("RISK_CLEAR_THRESHOLD", self.risk_clear_threshold)
+        if self.risk_clear_threshold >= self.risk_alert_threshold:
+            raise ValueError(
+                "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+                f"(got clear={self.risk_clear_threshold}, "
+                f"alert={self.risk_alert_threshold}); otherwise alerts would "
+                "never clear, or clear immediately, breaking hysteresis."
+            )
+        _require_non_negative("RISK_ALERT_COOLDOWN_SEC", self.risk_alert_cooldown_sec)
+
+        if self.healthcheck_enabled:
+            _require_positive("HEALTHCHECK_INTERVAL_SEC", self.healthcheck_interval_sec)
+
+        if not (0 < self.dashboard_port < 65536):
+            raise ValueError(
+                f"DASHBOARD_PORT must be between 1 and 65535 (got {self.dashboard_port})"
+            )
+
+        _require_ratio("ALERT_MIN_SCORE", self.alert_min_score)
+        if self.alert_format not in ("console", "json"):
+            raise ValueError(
+                f"ALERT_FORMAT must be 'console' or 'json' (got {self.alert_format!r})"
+            )
+
+        _require_non_negative("RUN_DURATION_SEC", self.run_duration_sec)
+
+
+def _require_positive(name: str, value) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0 (got {value})")
+
+
+def _require_non_negative(name: str, value) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0 (got {value})")
+
+
+def _require_ratio(name: str, value) -> None:
+    if not (0 <= value <= 1):
+        raise ValueError(f"{name} must be between 0 and 1 (got {value})")
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
