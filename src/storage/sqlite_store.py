@@ -100,7 +100,10 @@ class SQLiteStore(Store):
     def record_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
-        spread = (best_ask - best_bid) if (best_bid and best_ask) else None
+        # Existence check, not a truthiness check on the price value itself —
+        # a level at price 0.0 would otherwise make `best_bid and best_ask`
+        # falsy and silently drop a valid spread (mirrors OrderbookSnapshot.mid).
+        spread = (best_ask - best_bid) if (snapshot.bids and snapshot.asks) else None
         self._conn.execute(
             "INSERT INTO snapshots(market, ts, mid, best_bid, best_ask, spread, bids, asks) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -188,6 +191,37 @@ class SQLiteStore(Store):
             }
             for r in rows
         ]
+
+    def replay_snapshots(self, market: str, start_ts=None, end_ts=None):
+        """Reconstruct full :class:`OrderbookSnapshot` rows for ``market``.
+
+        Requires ``PERSIST_SNAPSHOTS=true`` to have been on while recording —
+        without it the ``snapshots`` table is empty and this yields nothing.
+        Ordered oldest -> newest, matching what the live detector stack
+        expects as history.
+        """
+        # Local import: this is the only reader that needs the snapshot
+        # dataclasses, and importing at module load would make storage depend
+        # on the collector package for no benefit to the write path.
+        from src.collector.orderbook_feed import Level, OrderbookSnapshot
+
+        clauses = ["market = ?"]
+        params: list = [market]
+        if start_ts is not None:
+            clauses.append("ts >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            clauses.append("ts <= ?")
+            params.append(end_ts)
+        cur = self._conn.execute(
+            "SELECT ts, bids, asks FROM snapshots WHERE "
+            + " AND ".join(clauses) + " ORDER BY ts ASC",
+            params,
+        )
+        for row in cur.fetchall():
+            bids = [Level(price, size) for price, size in json.loads(row["bids"])]
+            asks = [Level(price, size) for price, size in json.loads(row["asks"])]
+            yield OrderbookSnapshot(market=market, timestamp=row["ts"], bids=bids, asks=asks)
 
     # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:

@@ -111,10 +111,29 @@ _SCENARIOS = {
 # --------------------------------------------------------------------------- #
 # Runner
 # --------------------------------------------------------------------------- #
+def _safe_analyze(detector, snapshot, history) -> tuple[list[Detection], str]:
+    """Run one detector, converting a raised exception into an error string.
+
+    A broken detector must fail its own self-test/health-check entry, not
+    crash the whole run — this is invoked from the live periodic health-check
+    in src/watcher.py, where an uncaught exception would take down the
+    watcher's main loop.
+    """
+    try:
+        return detector.analyze(snapshot, history), ""
+    except Exception as exc:
+        return [], f"raised {exc.__class__.__name__}: {exc}"
+
+
 def run_selftest(settings) -> list[SelfTestResult]:
     """Run every scenario through the real stack; return per-target results."""
     detectors = [cls(settings) for cls in DEFAULT_DETECTORS]
     results: list[SelfTestResult] = []
+    # Keyed by the *offending* detector's own name, not by whichever
+    # scenario happened to be running when it raised — every scenario
+    # exercises the full detector stack (not just its own target), so an
+    # unrelated detector's crash must not be misattributed to this scenario.
+    detector_errors: dict[str, str] = {}
 
     for target, build in _SCENARIOS.items():
         fired = False
@@ -122,13 +141,17 @@ def run_selftest(settings) -> list[SelfTestResult]:
         history: list = []
         for snapshot in build():
             for detector in detectors:
-                for d in detector.analyze(snapshot, history):
+                detections, err = _safe_analyze(detector, snapshot, history)
+                if err:
+                    detector_errors.setdefault(detector.name, err)
+                for d in detections:
                     if d.detector == target:
                         fired = True
                         max_score = max(max_score, d.score)
             history.append(snapshot)
-        note = "" if fired else "did not fire on its scenario"
-        results.append(SelfTestResult(target, fired, round(max_score, 3), note))
+        error = detector_errors.get(target, "")
+        note = error or ("" if fired else "did not fire on its scenario")
+        results.append(SelfTestResult(target, fired and not error, round(max_score, 3), note))
 
     results.append(_test_risk_aggregator(settings, detectors))
     return results
@@ -142,7 +165,8 @@ def _test_risk_aggregator(settings, detectors) -> SelfTestResult:
     for tick in range(8):
         detections: list = []
         for detector in detectors:
-            detections.extend(detector.analyze(snapshot, history))
+            found, _err = _safe_analyze(detector, snapshot, history)
+            detections.extend(found)
         history.append(snapshot)
         if aggregator.update(_MARKET, float(tick), detections) is not None:
             fired = True

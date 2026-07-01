@@ -96,6 +96,25 @@ class Settings:
     # --- Run control ---
     run_duration_sec: float = 0.0
 
+    def __post_init__(self) -> None:
+        # These configs are divisors in detector score formulas (e.g.
+        # ``count / (min_count * 2)``); zero or negative values don't express
+        # a meaningful "how many is suspicious" threshold and would otherwise
+        # reach a ZeroDivisionError deep inside the detector stack — including
+        # from the periodic health-check, which would crash the whole watcher.
+        for name in (
+            "repeated_min_count",
+            "layering_min_levels",
+            "flicker_min_events",
+            "spoof_min_price_move",
+        ):
+            value = getattr(self, name)
+            if value <= 0:
+                raise ValueError(
+                    f"Invalid configuration: {name}={value!r} must be > 0 "
+                    f"(check the corresponding env var)."
+                )
+
 
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""

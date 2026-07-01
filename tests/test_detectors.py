@@ -231,5 +231,27 @@ def test_spoof_pull_needs_history():
     assert det.analyze(_prior_with_bid_wall(), []) == []
 
 
+def test_spoof_pull_finds_wall_on_thin_two_level_book():
+    # Regression: statistics.median([1, 100]) == 50.5, averaging the wall
+    # itself into the baseline and raising the threshold enough (5 * 50.5)
+    # to hide a 100-size wall next to a 1-size level. The baseline must be
+    # computed excluding the wall, not blended with it.
+    det = SpoofPullDetector(make_settings())
+    prior = snap(
+        bids=[(99.5, 100.0), (99.0, 1.0)],
+        asks=[(100.1, 1.0), (100.2, 1.0)],
+        ts=0.0,
+    )
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    detections = det.analyze(current, [prior])
+    assert len(detections) == 1
+    assert detections[0].details["side"] == "bid"
+    assert detections[0].details["wall_size"] == 100.0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

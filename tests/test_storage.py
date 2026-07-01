@@ -5,6 +5,8 @@ Tests the SQLite time-series store: schema creation, writes, and read-back.
 Uses a temporary on-disk DB so WAL mode behaves as in production.
 """
 
+import pytest
+
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector.base import Detection
 from src.storage import SQLiteStore
@@ -40,6 +42,34 @@ def test_record_snapshot(tmp_path):
     store = make_store(tmp_path)
     store.record_snapshot(snap())
     assert store.counts()["snapshots"] == 1
+    store.close()
+
+
+def test_replay_snapshots_roundtrips_levels_in_order(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=2.0))
+    store.record_snapshot(snap(market="OTHER", ts=1.0))
+    store.record_snapshot(snap(ts=1.0))
+
+    replayed = list(store.replay_snapshots("SOL-PERP"))
+    assert [s.timestamp for s in replayed] == [1.0, 2.0]  # ascending, other market excluded
+    assert replayed[0].bids == [Level(100.0, 5.0), Level(99.9, 3.0)]
+    assert replayed[0].asks == [Level(100.1, 4.0), Level(100.2, 2.0)]
+    store.close()
+
+
+def test_replay_snapshots_respects_time_bounds(tmp_path):
+    store = make_store(tmp_path)
+    for ts in (1.0, 2.0, 3.0):
+        store.record_snapshot(snap(ts=ts))
+    replayed = list(store.replay_snapshots("SOL-PERP", start_ts=1.5, end_ts=2.5))
+    assert [s.timestamp for s in replayed] == [2.0]
+    store.close()
+
+
+def test_replay_snapshots_empty_when_unrecorded(tmp_path):
+    store = make_store(tmp_path)
+    assert list(store.replay_snapshots("SOL-PERP")) == []
     store.close()
 
 
@@ -97,6 +127,23 @@ def test_summary_runs(tmp_path):
     text = store.summary()
     assert "Storage summary" in text
     assert "detections" in text
+    store.close()
+
+
+def test_record_snapshot_spread_with_zero_price_level(tmp_path):
+    # Regression: `best_bid and best_ask` is a truthiness check on the price
+    # value, not an existence check — a level at price 0.0 made it falsy and
+    # silently dropped a valid spread.
+    store = make_store(tmp_path)
+    zero_price_snap = OrderbookSnapshot(
+        market="SOL-PERP",
+        timestamp=1.0,
+        bids=[Level(0.0, 5.0)],
+        asks=[Level(0.1, 4.0)],
+    )
+    store.record_snapshot(zero_price_snap)
+    row = store._conn.execute("SELECT spread FROM snapshots").fetchone()
+    assert row["spread"] == pytest.approx(0.1)
     store.close()
 
 

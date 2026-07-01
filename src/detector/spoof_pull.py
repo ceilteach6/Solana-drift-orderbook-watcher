@@ -91,7 +91,15 @@ class SpoofPullDetector(BaseDetector):
         sizes = [lvl.size for lvl in levels if lvl.size > 0]
         if len(sizes) < 2:
             return None
-        median = statistics.median(sizes)
+        # The baseline must describe the "normal" side of the book, not the
+        # wall itself. On a thin/even-length side, statistics.median() would
+        # otherwise average the wall into the baseline (e.g. median([1, 100])
+        # == 50.5), inflating the threshold enough to hide the wall it's
+        # supposed to detect. Excluding the largest size(s) from the baseline
+        # keeps the ratio test comparing the wall against genuine depth.
+        largest = max(sizes)
+        baseline = [s for s in sizes if s != largest] or sizes
+        median = statistics.median(baseline)
         if median <= 0:
             return None
         threshold = self.settings.spoof_wall_ratio * median
