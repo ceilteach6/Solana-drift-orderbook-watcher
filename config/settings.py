@@ -97,12 +97,54 @@ class Settings:
     run_duration_sec: float = 0.0
 
 
+def _validate(settings: Settings) -> Settings:
+    """Fail fast on configuration that would otherwise misbehave silently.
+
+    These aren't hypothetical: an inverted risk hysteresis band causes alert
+    flapping, a non-positive update interval busy-loops the watcher, and an
+    empty market list makes it run forever while doing nothing.
+    """
+    errors: list[str] = []
+
+    if not settings.markets:
+        errors.append("MARKETS must list at least one market")
+    if settings.update_frequency_ms <= 0:
+        errors.append("UPDATE_FREQUENCY_MS must be > 0")
+    if settings.orderbook_depth <= 0:
+        errors.append("ORDERBOOK_DEPTH must be > 0")
+    if not 0.0 <= settings.risk_smoothing <= 1.0:
+        errors.append("RISK_SMOOTHING must be between 0 and 1")
+    if settings.risk_clear_threshold >= settings.risk_alert_threshold:
+        errors.append(
+            "RISK_CLEAR_THRESHOLD must be lower than RISK_ALERT_THRESHOLD "
+            "(otherwise the risk alert never clears / flaps)"
+        )
+    if settings.risk_alert_cooldown_sec < 0:
+        errors.append("RISK_ALERT_COOLDOWN_SEC must be >= 0")
+    if settings.healthcheck_interval_sec <= 0:
+        errors.append("HEALTHCHECK_INTERVAL_SEC must be > 0")
+    if not 0.0 <= settings.alert_min_score <= 1.0:
+        errors.append("ALERT_MIN_SCORE must be between 0 and 1")
+    if settings.alert_format not in ("console", "json"):
+        errors.append("ALERT_FORMAT must be 'console' or 'json'")
+    if settings.dashboard_port <= 0:
+        errors.append("DASHBOARD_PORT must be > 0")
+    if settings.run_duration_sec < 0:
+        errors.append("RUN_DURATION_SEC must be >= 0")
+
+    if errors:
+        raise ValueError(
+            "Invalid configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+    return settings
+
+
 def load_settings() -> Settings:
     """Build a :class:`Settings` instance from the current environment."""
     markets_raw = _get_str("MARKETS", "SOL-PERP")
     markets = [m.strip() for m in markets_raw.split(",") if m.strip()]
 
-    return Settings(
+    return _validate(Settings(
         rpc_url=_get_str("RPC_URL", "https://api.mainnet-beta.solana.com"),
         drift_env=_get_str("DRIFT_ENV", "mainnet"),
         keypair_path=_get_str("KEYPAIR_PATH", ""),
@@ -142,7 +184,7 @@ def load_settings() -> Settings:
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),
-    )
+    ))
 
 
 # Ready-to-use singleton.

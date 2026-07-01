@@ -76,13 +76,24 @@ class Store:
 
 
 def _levels_to_json(levels) -> str:
-    return json.dumps([[round(l.price, 8), round(l.size, 8)] for l in levels])
+    return json.dumps([[round(lvl.price, 8), round(lvl.size, 8)] for lvl in levels])
 
 
 class SQLiteStore(Store):
     def __init__(self, db_path: str = "data/watcher.db") -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The open connection, or a clear error instead of a bare AttributeError
+        if a caller reads/writes before ``connect()`` or after ``close()``."""
+        if self._conn is None:
+            raise RuntimeError(
+                f"SQLiteStore({self.db_path!r}) is not connected — call connect() "
+                "first (or it was already close()'d)"
+            )
+        return self._conn
 
     def connect(self) -> None:
         if self.db_path not in (":memory:", ""):
@@ -101,7 +112,7 @@ class SQLiteStore(Store):
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
         spread = (best_ask - best_bid) if (best_bid and best_ask) else None
-        self._conn.execute(
+        self._db.execute(
             "INSERT INTO snapshots(market, ts, mid, best_bid, best_ask, spread, bids, asks) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -115,7 +126,7 @@ class SQLiteStore(Store):
                 _levels_to_json(snapshot.asks),
             ),
         )
-        self._conn.commit()
+        self._db.commit()
 
     def record_detections(self, ts: float, detections) -> None:
         """Record detections, stamped with the snapshot timestamp."""
@@ -125,26 +136,26 @@ class SQLiteStore(Store):
         ]
         if not rows:
             return
-        self._conn.executemany(
+        self._db.executemany(
             "INSERT INTO detections(market, ts, detector, score, message, details) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        self._conn.commit()
+        self._db.commit()
 
     def record_risk(self, market: str, ts: float, score: float, mid=None) -> None:
-        self._conn.execute(
+        self._db.execute(
             "INSERT INTO risk(market, ts, score, mid) VALUES (?, ?, ?, ?)",
             (market, ts, score, mid),
         )
-        self._conn.commit()
+        self._db.commit()
 
     # ------------------------------------------------------------------ #
     # Read APIs for the dashboard (bucketed to whole seconds so the chart
     # gets unique, ascending time values).
     # ------------------------------------------------------------------ #
     def markets(self) -> list[str]:
-        cur = self._conn.execute(
+        cur = self._db.execute(
             "SELECT DISTINCT market FROM risk "
             "UNION SELECT DISTINCT market FROM detections ORDER BY market"
         )
@@ -155,7 +166,7 @@ class SQLiteStore(Store):
     def _series(self, column: str, market: str, limit: int):
         if column not in self._ALLOWED_SERIES_COLUMNS:
             raise ValueError(f"Invalid column: {column!r}")
-        cur = self._conn.execute(
+        cur = self._db.execute(
             f"SELECT CAST(ts AS INTEGER) AS sec, AVG({column}) AS v FROM risk "
             f"WHERE market = ? AND {column} IS NOT NULL "
             "GROUP BY sec ORDER BY sec DESC LIMIT ?",
@@ -172,7 +183,7 @@ class SQLiteStore(Store):
         return self._series("score", market, limit)
 
     def detection_markers(self, market: str, limit: int = 200):
-        cur = self._conn.execute(
+        cur = self._db.execute(
             "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
             "WHERE market = ? ORDER BY id DESC LIMIT ?",
             (market, limit),
@@ -193,12 +204,12 @@ class SQLiteStore(Store):
     def counts(self) -> dict[str, int]:
         out = {}
         for table in ("snapshots", "detections", "risk"):
-            cur = self._conn.execute(f"SELECT COUNT(*) AS n FROM {table}")
+            cur = self._db.execute(f"SELECT COUNT(*) AS n FROM {table}")
             out[table] = cur.fetchone()["n"]
         return out
 
     def recent_detections(self, limit: int = 10) -> list[sqlite3.Row]:
-        cur = self._conn.execute(
+        cur = self._db.execute(
             "SELECT ts, market, detector, score, message FROM detections "
             "ORDER BY id DESC LIMIT ?",
             (limit,),

@@ -21,7 +21,6 @@ from dataclasses import dataclass
 
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector import DEFAULT_DETECTORS
-from src.detector.base import Detection
 from src.risk import RiskAggregator
 
 _MARKET = "SELFTEST"

@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# Shared across all WebhookAlert instances: delivery is fire-and-forget HTTP,
+# so a small bounded pool is plenty. Bounding it (instead of a thread per
+# alert) keeps a burst of detections from spawning unbounded OS threads.
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook-alert")
 
 
 class WebhookAlert(Alert):
@@ -38,13 +43,11 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared pool to avoid blocking the event loop."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _EXECUTOR.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
