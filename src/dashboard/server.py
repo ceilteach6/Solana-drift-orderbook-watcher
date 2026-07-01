@@ -29,6 +29,7 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
+_MAX_LIMIT = 5000  # hard cap regardless of what the client requests
 
 
 def _make_handler(db_path: str):
@@ -66,6 +67,12 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            # SQLite treats a non-positive LIMIT as "no limit", so a
+            # negative/zero value here would silently bypass the cap and
+            # return the entire table. Clamp instead of trusting the input.
+            if limit <= 0:
+                return self._send_json({"error": "limit must be a positive integer"}, 400)
+            limit = min(limit, _MAX_LIMIT)
 
             if route in ("/", "/index.html"):
                 return self._send_html()

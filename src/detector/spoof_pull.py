@@ -31,6 +31,9 @@ _PRICE_DECIMALS = 4
 class SpoofPullDetector(BaseDetector):
     name = "spoof_pull"
 
+    def required_window_sec(self) -> float:
+        return self.settings.spoof_window_sec
+
     def analyze(self, snapshot, history) -> list[Detection]:
         window = self.settings.spoof_window_sec
         now = snapshot.timestamp

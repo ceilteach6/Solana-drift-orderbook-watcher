@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
+from src.detector.base import cluster_sizes
 from src.detector.flicker import FlickerDetector
 from src.detector.imbalance import ImbalanceDetector
 from src.detector.layering import LayeringDetector
@@ -72,6 +73,49 @@ def test_repeated_size_quiet_on_varied_sizes():
         asks=[(101, 4.0), (102, 5.0)],
     )
     assert det.analyze(s, []) == []
+
+
+def test_repeated_size_fires_on_gradual_ramp_within_tolerance():
+    # Each consecutive size is ~0.8% above the previous one (within the 1%
+    # tolerance), so a bot ramping its order size slightly between orders is
+    # still one cluster of 8, not several fragments of 2 (regression for the
+    # greedy running-mean clustering bug).
+    det = RepeatedSizeDetector(make_settings(repeated_size_tolerance=0.01))
+    ramp = [100.0 * (1.008 ** i) for i in range(8)]
+    s = snap(
+        bids=[(100 - i, sz) for i, sz in enumerate(ramp[:4])],
+        asks=[(101 + i, sz) for i, sz in enumerate(ramp[4:])],
+    )
+    detections = det.analyze(s, [])
+    assert len(detections) == 1
+    assert detections[0].details["count"] == 8
+
+
+# --------------------------------------------------------------------------- #
+# cluster_sizes (shared clustering helper)
+# --------------------------------------------------------------------------- #
+def test_cluster_sizes_merges_smooth_ramp_into_one_cluster():
+    ramp = [100.0 * (1.008 ** i) for i in range(8)]
+    clusters = cluster_sizes(ramp, tolerance=0.01)
+    assert len(clusters) == 1
+    assert clusters[0].count == 8
+
+
+def test_cluster_sizes_is_order_independent():
+    import random
+
+    ramp = [100.0 * (1.008 ** i) for i in range(8)]
+    shuffled = list(ramp)
+    random.Random(42).shuffle(shuffled)
+    assert [c.count for c in cluster_sizes(ramp, 0.01)] == [
+        c.count for c in cluster_sizes(shuffled, 0.01)
+    ]
+
+
+def test_cluster_sizes_splits_on_gap_beyond_tolerance():
+    clusters = cluster_sizes([10.0, 10.05, 50.0, 50.2], tolerance=0.01)
+    assert len(clusters) == 2
+    assert {c.count for c in clusters} == {2, 2}
 
 
 # --------------------------------------------------------------------------- #

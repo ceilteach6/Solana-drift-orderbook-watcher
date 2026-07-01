@@ -33,6 +33,19 @@ class BaseDetector:
     def __init__(self, settings) -> None:
         self.settings = settings
 
+    def required_window_sec(self) -> float:
+        """Seconds of prior history this detector needs in ``history``.
+
+        The watcher sizes its per-market history buffer from the max of every
+        registered detector's declared window, so a detector that looks back
+        further than the buffer holds can never silently lose data. Detectors
+        that only inspect the current snapshot (no ``history`` look-back)
+        should leave this at the default of ``0.0``; detectors that filter
+        ``history`` by a time window must override this to return that
+        window so the buffer is always sized to cover it.
+        """
+        return 0.0
+
     def analyze(self, snapshot, history) -> list[Detection]:
         """Inspect ``snapshot`` (and prior ``history``) for a pattern.
 
@@ -58,21 +71,27 @@ class _Cluster:
 
 
 def cluster_sizes(sizes, tolerance: float) -> list[_Cluster]:
-    """Greedily group near-equal sizes.
+    """Group near-equal sizes via single-linkage clustering.
 
-    Two sizes belong together when ``abs(a - b) <= tolerance * max(a, b)``
-    (relative tolerance). Returns clusters sorted by descending count.
+    Sizes are sorted, then split into a new cluster only where the gap to the
+    immediately preceding (sorted) value exceeds ``tolerance * max(a, b)``
+    (relative tolerance). Because membership is decided from the fixed sorted
+    order rather than a running average that drifts as items are added, the
+    result is order-independent and a smooth ramp of sizes where every
+    consecutive pair is within tolerance always collapses into one cluster —
+    it can't fragment the way a greedy nearest-running-mean join would.
+    Returns clusters sorted by descending count.
     """
+    ordered = sorted(float(x) for x in sizes)
     clusters: list[_Cluster] = []
-    for s in sorted(float(x) for x in sizes):
-        placed = False
-        for c in clusters:
-            if abs(s - c.rep) <= tolerance * max(s, c.rep, 1e-9):
-                c.sizes.append(s)
-                c.rep = sum(c.sizes) / len(c.sizes)
-                placed = True
-                break
-        if not placed:
+    for s in ordered:
+        if clusters and abs(s - clusters[-1].sizes[-1]) <= tolerance * max(
+            s, clusters[-1].sizes[-1], 1e-9
+        ):
+            clusters[-1].sizes.append(s)
+        else:
             clusters.append(_Cluster(rep=s, sizes=[s]))
+    for c in clusters:
+        c.rep = sum(c.sizes) / len(c.sizes)
     clusters.sort(key=lambda c: c.count, reverse=True)
     return clusters

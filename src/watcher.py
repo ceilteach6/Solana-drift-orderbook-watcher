@@ -36,9 +36,12 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover every detector's declared
+        # look-back window (see BaseDetector.required_window_sec) so adding a
+        # detector with a longer window can't silently truncate its own data.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        window_sec = max((d.required_window_sec() for d in self.detectors), default=0.0)
+        history_len = max(8, int(window_sec / interval) + 4)
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }

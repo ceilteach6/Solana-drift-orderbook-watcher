@@ -100,7 +100,11 @@ class SQLiteStore(Store):
     def record_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None
         best_ask = snapshot.asks[0].price if snapshot.asks else None
-        spread = (best_ask - best_bid) if (best_bid and best_ask) else None
+        spread = (
+            (best_ask - best_bid)
+            if (best_bid is not None and best_ask is not None)
+            else None
+        )
         self._conn.execute(
             "INSERT INTO snapshots(market, ts, mid, best_bid, best_ask, spread, bids, asks) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

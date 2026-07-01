@@ -100,6 +100,27 @@ def test_summary_runs(tmp_path):
     store.close()
 
 
+def test_record_snapshot_computes_spread_when_best_bid_is_zero(tmp_path):
+    # A truthiness check on best_bid/best_ask (e.g. `if best_bid and best_ask`)
+    # would treat a legitimate best_bid of exactly 0.0 as "missing" and store
+    # spread=NULL even though both prices are present. Regression for that.
+    store = make_store(tmp_path)
+    zero_bid_snap = OrderbookSnapshot(
+        market="SOL-PERP",
+        timestamp=1.0,
+        bids=[Level(0.0, 5.0)],
+        asks=[Level(0.1, 4.0)],
+    )
+    store.record_snapshot(zero_bid_snap)
+    row = store._conn.execute(
+        "SELECT best_bid, best_ask, spread FROM snapshots LIMIT 1"
+    ).fetchone()
+    assert row["best_bid"] == 0.0
+    assert row["best_ask"] == 0.1
+    assert row["spread"] == 0.1
+    store.close()
+
+
 def test_persistence_across_reopen(tmp_path):
     path = str(tmp_path / "persist.db")
     store = SQLiteStore(path)

@@ -17,12 +17,22 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# Shared, bounded worker pool for webhook delivery. A burst of correlated
+# alerts (exactly the scenario this tool exists to catch — multiple
+# detectors/markets tripping at once) must not spawn one OS thread per
+# alert; capping the pool turns unbounded thread growth into bounded
+# queueing instead, at the cost of alerts serializing past the cap.
+_MAX_WORKERS = 4
+_executor = ThreadPoolExecutor(
+    max_workers=_MAX_WORKERS, thread_name_prefix="webhook-alert"
+)
 
 
 class WebhookAlert(Alert):
@@ -38,13 +48,11 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the shared pool to avoid blocking the caller."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        _executor.submit(self._send, payload, url)
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
