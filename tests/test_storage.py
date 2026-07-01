@@ -135,3 +135,34 @@ def test_record_tick_visible_without_explicit_commit(tmp_path):
     assert store.counts()["detections"] == 1
     assert store.counts()["risk"] == 1
     store.close()
+
+
+def test_snapshot_markets_lists_only_markets_with_persisted_snapshots(tmp_path):
+    store = make_store(tmp_path)
+    store.record_risk("SOL-PERP", 1.0, 0.5)  # a market with risk but no snapshot
+    store.record_snapshot(snap(market="BTC-PERP"))
+    assert store.snapshot_markets() == ["BTC-PERP"]
+    store.close()
+
+
+def test_snapshots_round_trips_bids_and_asks(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=1.0))
+    store.record_snapshot(snap(ts=2.0))
+
+    rows = list(store.snapshots("SOL-PERP"))
+    assert [r.timestamp for r in rows] == [1.0, 2.0]
+    assert [(l.price, l.size) for l in rows[0].bids] == [(100.0, 5.0), (99.9, 3.0)]
+    assert [(l.price, l.size) for l in rows[0].asks] == [(100.1, 4.0), (100.2, 2.0)]
+    store.close()
+
+
+def test_snapshots_respects_time_range(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=1.0))
+    store.record_snapshot(snap(ts=2.0))
+    store.record_snapshot(snap(ts=3.0))
+
+    rows = list(store.snapshots("SOL-PERP", start_ts=1.5, end_ts=2.5))
+    assert [r.timestamp for r in rows] == [2.0]
+    store.close()

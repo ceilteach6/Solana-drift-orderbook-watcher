@@ -19,6 +19,8 @@ import json
 import os
 import sqlite3
 
+from src.collector.orderbook_feed import Level, OrderbookSnapshot
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id        INTEGER PRIMARY KEY,
@@ -215,6 +217,37 @@ class SQLiteStore(Store):
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------ #
+    # Read API for replay/backtesting (see src/replay.py). Requires
+    # PERSIST_SNAPSHOTS=true to have been set while the watcher ran — the
+    # detections/risk tables alone don't carry the L2 book, so they can't be
+    # re-run through a detector stack with different thresholds.
+    # ------------------------------------------------------------------ #
+    def snapshot_markets(self) -> list[str]:
+        cur = self._conn.execute("SELECT DISTINCT market FROM snapshots ORDER BY market")
+        return [r["market"] for r in cur.fetchall()]
+
+    def snapshots(self, market: str, start_ts: float | None = None, end_ts: float | None = None):
+        """Yield persisted :class:`OrderbookSnapshot`\\ s for ``market``, oldest
+        first, reconstructed from the stored L2 book JSON."""
+        query = "SELECT ts, bids, asks FROM snapshots WHERE market = ?"
+        params: list = [market]
+        if start_ts is not None:
+            query += " AND ts >= ?"
+            params.append(start_ts)
+        if end_ts is not None:
+            query += " AND ts <= ?"
+            params.append(end_ts)
+        query += " ORDER BY ts ASC"
+        cur = self._conn.execute(query, params)
+        for row in cur:
+            yield OrderbookSnapshot(
+                market=market,
+                timestamp=row["ts"],
+                bids=[Level(p, s) for p, s in json.loads(row["bids"])],
+                asks=[Level(p, s) for p, s in json.loads(row["asks"])],
+            )
 
     # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:

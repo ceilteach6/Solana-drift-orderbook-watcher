@@ -53,6 +53,7 @@ drift-orderbook-watcher/
 │   │   └── flicker.py           # Order flicker (rapid appear/disappear)
 │   ├── alert/
 │   │   └── console_alert.py     # Alert output (console / JSON)
+│   ├── replay.py                # Replay/backtesting over stored snapshots
 │   └── watcher.py               # Main orchestrator
 ├── config/
 │   └── settings.py              # Configuration (from env)
@@ -120,6 +121,19 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Replay / backtesting
+With `PERSIST_SNAPSHOTS=true` set while the watcher ran, replay the stored L2
+books back through the *live* detector stack and risk aggregator:
+```bash
+python main.py --replay                                  # every market with stored snapshots
+python main.py --replay --market=SOL-PERP
+python main.py --replay --market=SOL-PERP --from=2026-06-30T00:00:00 --to=2026-06-30T12:00:00
+```
+Because it runs the same code the live watcher does, it's also how you
+evaluate a candidate threshold change against real history before shipping it
+— see `src/replay.py`'s `replay_market()`, which takes any `Settings` (e.g.
+built with `dataclasses.replace(settings, flicker_min_events=5)`).
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -178,9 +192,9 @@ Then register it in `watcher.py`. That's it.
 
 ## 🗺️ Roadmap (extension ideas)
 
-- [ ] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
-- [ ] Telegram/Discord alerts
-- [ ] Time-series storage (SQLite/Postgres) and replay
+- [x] Watch multiple markets in parallel (SOL-PERP, BTC-PERP, ETH-PERP)
+- [x] Telegram/Discord alerts
+- [x] Time-series storage (SQLite) and replay
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
 - [ ] Prometheus metrics (modeled on the Drift-style exporter)
