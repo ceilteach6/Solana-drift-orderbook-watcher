@@ -70,10 +70,11 @@ def _make_handler(db_path: str):
             if route in ("/", "/index.html"):
                 return self._send_html()
 
-            # Each request opens its own short-lived read connection.
+            # Each request opens its own short-lived read-only connection (no
+            # schema creation/commit — the watcher's writer connection owns that).
             store = SQLiteStore(db_path)
             try:
-                store.connect()
+                store.connect_readonly()
                 if route == "/api/markets":
                     return self._send_json(store.markets())
                 if route == "/api/series":

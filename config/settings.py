@@ -12,8 +12,11 @@ Import the ready-to-use singleton:
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -95,6 +98,36 @@ class Settings:
 
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        # Settings is frozen (immutable at runtime), but load-time is fine to
+        # clamp: without this, two independent, uncorrelated env vars (a tiny
+        # update_frequency_ms with a large flicker_window_sec) can silently
+        # produce an unbounded per-market history buffer, and a handful of
+        # other numeric knobs accept any value including ones that make a
+        # detector permanently no-op or every detection alert. Clamp to a sane
+        # range and warn instead of failing outright — the goal is "the
+        # watcher never crashes and never silently degrades", not stricter
+        # validation for its own sake.
+        self._clamp("update_frequency_ms", minimum=1)
+        self._clamp("flicker_window_sec", minimum=0.0)
+        self._clamp("healthcheck_interval_sec", minimum=1.0)
+        self._clamp("risk_alert_cooldown_sec", minimum=0.0)
+        self._clamp("alert_min_score", minimum=0.0, maximum=1.0)
+        self._clamp("risk_smoothing", minimum=0.0, maximum=1.0)
+
+    def _clamp(self, name: str, minimum=None, maximum=None) -> None:
+        value = getattr(self, name)
+        clamped = value
+        if minimum is not None and clamped < minimum:
+            clamped = minimum
+        if maximum is not None and clamped > maximum:
+            clamped = maximum
+        if clamped != value:
+            logger.warning(
+                "%s=%r out of range, clamped to %r", name.upper(), value, clamped
+            )
+            object.__setattr__(self, name, clamped)
 
 
 def load_settings() -> Settings:

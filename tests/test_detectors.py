@@ -231,5 +231,34 @@ def test_spoof_pull_needs_history():
     assert det.analyze(_prior_with_bid_wall(), []) == []
 
 
+# --------------------------------------------------------------------------- #
+# cluster_sizes (shared by repeated-size and layering detectors)
+# --------------------------------------------------------------------------- #
+def test_cluster_sizes_bounds_width_to_anchor_not_running_mean():
+    """A cluster's total spread must never exceed ~tolerance of its anchor.
+
+    Comparing new members against a *running mean* lets the mean drift as a
+    cluster grows, so a chain of sizes each within tolerance of its neighbor
+    (but not of the original anchor) could previously all merge into one
+    cluster spanning far more than `tolerance` — silently letting a bot with
+    a slowly-ramping size schedule dodge the repeated-size/layering checks.
+    """
+    from src.detector.base import cluster_sizes
+
+    sizes = [round(1.00 + 0.01 * i, 2) for i in range(21)]  # 1.00 .. 1.20
+    clusters = cluster_sizes(sizes, tolerance=0.015)
+    for c in clusters:
+        width_ratio = (max(c.sizes) - min(c.sizes)) / max(c.sizes)
+        assert width_ratio <= 0.015 + 1e-9
+
+
+def test_cluster_sizes_merges_truly_near_equal_sizes():
+    from src.detector.base import cluster_sizes
+
+    clusters = cluster_sizes([10.0, 10.001, 9.999, 10.002], tolerance=0.001)
+    assert len(clusters) == 1
+    assert clusters[0].count == 4
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

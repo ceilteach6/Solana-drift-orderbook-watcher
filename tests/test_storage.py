@@ -5,6 +5,10 @@ Tests the SQLite time-series store: schema creation, writes, and read-back.
 Uses a temporary on-disk DB so WAL mode behaves as in production.
 """
 
+import sqlite3
+
+import pytest
+
 from src.collector.orderbook_feed import Level, OrderbookSnapshot
 from src.detector.base import Detection
 from src.storage import SQLiteStore
@@ -111,3 +115,35 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_readonly_connection_reads_without_writing(tmp_path):
+    """The dashboard uses connect_readonly(): it must never create the schema
+    or take a write lock — only the watcher's writer connection should do that.
+    """
+    path = str(tmp_path / "ro.db")
+    writer = SQLiteStore(path)
+    writer.connect()
+    writer.record_risk("SOL-PERP", 1.0, 0.5, 150.0)
+
+    reader = SQLiteStore(path)
+    reader.connect_readonly()
+    assert reader.counts()["risk"] == 1
+    assert reader.markets() == ["SOL-PERP"]
+    reader.close()
+    writer.close()
+
+
+def test_readonly_connection_rejects_writes(tmp_path):
+    path = str(tmp_path / "ro_write.db")
+    writer = SQLiteStore(path)
+    writer.connect()
+    writer.close()
+
+    reader = SQLiteStore(path)
+    reader.connect_readonly()
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            reader.record_risk("SOL-PERP", 1.0, 0.5)
+    finally:
+        reader.close()

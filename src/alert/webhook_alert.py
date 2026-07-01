@@ -17,12 +17,45 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
+import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from src.alert.base import Alert
 
 logger = logging.getLogger(__name__)
+
+# A shared, bounded pool for ALL webhook deliveries (module-level, not per
+# instance): a burst of alerts queues onto these workers instead of spawning
+# one OS thread per alert, which under sustained bursts (or a slow/unreachable
+# endpoint) would otherwise grow unbounded and could exhaust process/thread
+# limits. Queued work that can't be drained in time is dropped (with a
+# rate-limited log) rather than piling up indefinitely.
+_MAX_WORKERS = 4
+_MAX_QUEUED = 200
+_executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="webhook-alert")
+_RETRY_DELAYS_SEC = (0.5, 2.0)  # short retry/backoff for transient failures
+
+
+class _QueueDepthGuard:
+    """Tracks in-flight + queued work so we can refuse instead of growing forever."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._pending = 0
+
+    def try_acquire(self) -> bool:
+        if self._pending >= self._limit:
+            return False
+        self._pending += 1
+        return True
+
+    def release(self) -> None:
+        self._pending -= 1
+
+
+_queue_guard = _QueueDepthGuard(_MAX_QUEUED)
 
 
 class WebhookAlert(Alert):
@@ -38,24 +71,39 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Submit HTTP delivery to a bounded worker pool (never blocks the caller)."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        if not _queue_guard.try_acquire():
+            logger.warning(
+                "Webhook queue full (%d pending) — dropping alert for %s",
+                _MAX_QUEUED, self._target(),
+            )
+            return
+        future = _executor.submit(self._send, payload, url)
+        future.add_done_callback(lambda _f: _queue_guard.release())
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}
         )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
-                resp.read()
-        except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+        attempts = len(_RETRY_DELAYS_SEC) + 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+                    resp.read()
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code < 500 or attempt == attempts - 1:
+                    logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+                    return
+            except Exception as exc:
+                if attempt == attempts - 1:
+                    logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+                    return
+            time.sleep(_RETRY_DELAYS_SEC[attempt])
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:

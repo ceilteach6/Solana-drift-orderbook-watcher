@@ -96,6 +96,19 @@ class SQLiteStore(Store):
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
+    def connect_readonly(self) -> None:
+        """Open the DB for reads only — no schema creation, no writes/commits.
+
+        Meant for read-only consumers (e.g. the dashboard) that only ever need
+        the schema the writer (the watcher) has already created. Skipping the
+        ``executescript``/``commit`` avoids taking a write lock on every request,
+        which otherwise risks ``database is locked`` errors under frequent
+        polling and does needless work on every single read.
+        """
+        uri = f"file:{self.db_path}?mode=ro"
+        self._conn = sqlite3.connect(uri, uri=True)
+        self._conn.row_factory = sqlite3.Row
+
     # ------------------------------------------------------------------ #
     def record_snapshot(self, snapshot) -> None:
         best_bid = snapshot.bids[0].price if snapshot.bids else None

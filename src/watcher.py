@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import defaultdict, deque
 
 from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
@@ -36,12 +36,17 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover the flicker window. Capped so a
+        # very small update_frequency_ms combined with a large flicker_window_sec
+        # can't silently balloon memory usage.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
-        self._history: dict[str, deque] = {
-            market: deque(maxlen=history_len) for market in settings.markets
-        }
+        history_len = min(max(8, int(settings.flicker_window_sec / interval) + 4), 10_000)
+        # defaultdict rather than a fixed dict: a market not present at construction
+        # time (e.g. a feed/config mismatch) gets fresh history instead of raising
+        # KeyError and taking down the whole watch loop.
+        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=history_len))
+        for market in settings.markets:
+            self._history[market]  # noqa: B018 - pre-populate so _banner/order is stable
 
     @staticmethod
     def _build_detectors(settings) -> list:
@@ -73,9 +78,20 @@ class Watcher:
 
         while True:
             for market in self.settings.markets:
-                await self._tick(market)
+                try:
+                    await self._tick(market)
+                except Exception:
+                    # _tick already guards its own sub-steps individually; this is
+                    # a last-resort backstop so one market can never take down the
+                    # loop (and therefore every other market) or the process.
+                    logger.exception("Unhandled error ticking %s — skipping this cycle", market)
 
-            self._maybe_healthcheck()
+            try:
+                self._maybe_healthcheck()
+            except Exception:
+                # An opt-in reliability feature must never be able to crash the
+                # very process it's meant to keep reliable.
+                logger.exception("Health-check raised — disabling until next interval")
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
