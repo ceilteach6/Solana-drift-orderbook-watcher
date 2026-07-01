@@ -19,6 +19,10 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay stored snapshots through the detectors (backtesting / threshold tuning):
+  python main.py --replay [--market SOL-PERP] [--since WHEN] [--until WHEN]
+  python main.py --replay --sweep risk_alert_threshold=0.4,0.5,0.6
 """
 
 import asyncio
@@ -47,6 +51,12 @@ if __name__ == "__main__":
         print(store.summary())
         store.close()
         sys.exit(0)
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import run_replay
+
+        args = [a for a in sys.argv[1:] if a != "--replay"]
+        sys.exit(run_replay(settings, args))
 
     if "--dashboard" in sys.argv[1:]:
         from src.dashboard import run_dashboard

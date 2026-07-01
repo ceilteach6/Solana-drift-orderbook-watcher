@@ -198,6 +198,40 @@ class SQLiteStore(Store):
     def risk_series(self, market: str, limit: int = 2000):
         return self._series("score", market, limit)
 
+    # ------------------------------------------------------------------ #
+    # Read APIs for replay (full stored L2 books, in recorded order).
+    # ------------------------------------------------------------------ #
+    def snapshot_markets(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT market FROM snapshots ORDER BY market"
+        )
+        return [r["market"] for r in cur.fetchall()]
+
+    def iter_snapshots(self, market: str, start: float | None = None,
+                       end: float | None = None):
+        """Yield stored snapshot rows for a market, oldest first.
+
+        ``start``/``end`` bound the epoch-seconds range (inclusive). Rows are
+        ordered by (ts, id) so ticks recorded within the same second replay in
+        insertion order. This is a generator over a live cursor, so the store
+        must stay open while consuming it.
+        """
+        query = "SELECT * FROM snapshots WHERE market = ?"
+        params: list = [market]
+        if start is not None:
+            query += " AND ts >= ?"
+            params.append(start)
+        if end is not None:
+            query += " AND ts <= ?"
+            params.append(end)
+        query += " ORDER BY ts, id"
+        cur = self._conn.execute(query, params)
+        while True:
+            rows = cur.fetchmany(256)
+            if not rows:
+                return
+            yield from rows
+
     def detection_markers(self, market: str, limit: int = 200):
         cur = self._conn.execute(
             "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
