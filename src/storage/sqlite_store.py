@@ -84,17 +84,28 @@ class SQLiteStore(Store):
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
 
-    def connect(self) -> None:
+    def connect(self, *, read_only: bool = False, check_same_thread: bool = True) -> None:
+        """Open the connection.
+
+        ``read_only`` skips the schema DDL (the writer already owns it) and
+        sets ``PRAGMA query_only`` so this handle can never mutate the DB.
+        ``check_same_thread=False`` is for callers (e.g. a threaded HTTP
+        server) that serialize their own cross-thread access with a lock —
+        sqlite3 connections are not otherwise thread-safe to share.
+        """
         if self.db_path not in (":memory:", ""):
             parent = os.path.dirname(self.db_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=check_same_thread)
         self._conn.row_factory = sqlite3.Row
         # WAL lets a dashboard read while the watcher writes.
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        if read_only:
+            self._conn.execute("PRAGMA query_only=ON")
+        else:
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
 
     # ------------------------------------------------------------------ #
     def record_snapshot(self, snapshot) -> None:

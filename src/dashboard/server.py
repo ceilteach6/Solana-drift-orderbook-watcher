@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
 
-def _make_handler(db_path: str):
+def _make_handler(store: SQLiteStore, lock: threading.Lock):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet default logging
             return
@@ -70,29 +71,30 @@ def _make_handler(db_path: str):
             if route in ("/", "/index.html"):
                 return self._send_html()
 
-            # Each request opens its own short-lived read connection.
-            store = SQLiteStore(db_path)
+            # One shared read-only connection for the process, serialized by
+            # a lock (ThreadingHTTPServer runs each request on its own
+            # thread; sqlite3 connections aren't safe to use unsynchronized
+            # across threads). Avoids reopening + re-running schema DDL on
+            # every single request.
             try:
-                store.connect()
-                if route == "/api/markets":
-                    return self._send_json(store.markets())
-                if route == "/api/series":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json({
-                        "price": store.price_series(market, limit),
-                        "risk": store.risk_series(market, limit),
-                    })
-                if route == "/api/detections":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json(store.detection_markers(market, limit))
-                return self._send_json({"error": "not found"}, 404)
+                with lock:
+                    if route == "/api/markets":
+                        return self._send_json(store.markets())
+                    if route == "/api/series":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json({
+                            "price": store.price_series(market, limit),
+                            "risk": store.risk_series(market, limit),
+                        })
+                    if route == "/api/detections":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json(store.detection_markers(market, limit))
+                    return self._send_json({"error": "not found"}, 404)
             except Exception as exc:
                 logger.exception("dashboard request failed")
                 return self._send_json({"error": str(exc)}, 500)
-            finally:
-                store.close()
 
     return Handler
 
@@ -104,7 +106,9 @@ def run_dashboard(settings) -> int:
         print("   Run the watcher with STORAGE_ENABLED=true first.")
         return 1
 
-    handler = _make_handler(settings.db_path)
+    store = SQLiteStore(settings.db_path)
+    store.connect(read_only=True, check_same_thread=False)
+    handler = _make_handler(store, threading.Lock())
     server = ThreadingHTTPServer(
         (settings.dashboard_host, settings.dashboard_port), handler
     )
@@ -117,4 +121,5 @@ def run_dashboard(settings) -> int:
         print("\n⏹️  Dashboard stopped.")
     finally:
         server.server_close()
+        store.close()
     return 0
