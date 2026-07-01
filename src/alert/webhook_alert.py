@@ -18,6 +18,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import threading
 import urllib.request
 
 from src.alert.base import Alert
@@ -32,9 +33,23 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=8, thread_name_prefix="webhook-alert"
 )
 
+# After this many consecutive delivery failures (bad token, revoked webhook,
+# sustained rate-limiting), a single ERROR-level escalation is logged. Without
+# this, a broken webhook fails silently at warning level forever: on an
+# unattended run, actionable alerts (e.g. a detected spoof) can stop reaching
+# Telegram/Discord for the rest of the run with nothing louder than scrolling
+# log lines to notice it by.
+_CONSECUTIVE_FAILURE_ALERT_THRESHOLD = 5
+
 
 class WebhookAlert(Alert):
     name = "webhook"
+
+    def __init__(self, settings) -> None:
+        super().__init__(settings)
+        self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._escalated = False
 
     @staticmethod
     def is_configured(settings) -> bool:
@@ -62,6 +77,32 @@ class WebhookAlert(Alert):
                 resp.read()
         except Exception as exc:
             logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+            self._on_failure()
+        else:
+            self._on_success()
+
+    # --- consecutive-failure escalation (runs on the executor threads) --- #
+    def _on_success(self) -> None:
+        with self._lock:
+            self._consecutive_failures = 0
+            self._escalated = False
+
+    def _on_failure(self) -> None:
+        with self._lock:
+            self._consecutive_failures += 1
+            count = self._consecutive_failures
+            should_escalate = (
+                count >= _CONSECUTIVE_FAILURE_ALERT_THRESHOLD and not self._escalated
+            )
+            if should_escalate:
+                self._escalated = True
+        if should_escalate:
+            logger.error(
+                "Webhook delivery (%s) has failed %d times in a row — alerts "
+                "are NOT reaching this sink (check the token/URL/network). "
+                "Detections are still visible via the console sink.",
+                self._target(), count,
+            )
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:

@@ -25,6 +25,15 @@ from src.storage import SQLiteStore
 
 logger = logging.getLogger(__name__)
 
+# If every registered detector raises on this many consecutive ticks for a
+# market, something is structurally broken (a bad settings combination that
+# only manifests on live data shapes, a driftpy/library version mismatch,
+# etc.) rather than a one-off bad snapshot. Distinct from HEALTHCHECK_ENABLED
+# (which probes with synthetic known-positive scenarios on a timer): this
+# fires from what's actually happening on live ticks, so it still catches the
+# failure even when the operator hasn't opted into the periodic self-test.
+_DETECTOR_STACK_FAILURE_ALERT_THRESHOLD = 5
+
 
 class Watcher:
     def __init__(self, settings) -> None:
@@ -35,6 +44,8 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._consecutive_detector_failures: dict[str, int] = {}
+        self._detector_stack_alerting: dict[str, bool] = {}
 
         # Keep enough history per market to cover the flicker window.
         # (Settings.__post_init__ guarantees update_frequency_ms > 0.)
@@ -125,12 +136,15 @@ class Watcher:
         # caller other than load_settings()).
         history = self._history.setdefault(market, deque(maxlen=self._history_len))
         detections = []
+        failures = 0
         for detector in self.detectors:
             try:
                 detections.extend(detector.analyze(snapshot, history))
             except Exception:
+                failures += 1
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
+        self._track_detector_stack_health(market, failures)
 
         if self.aggregator is not None:
             # Consolidate into a single smoothed risk signal per market.
@@ -145,6 +159,49 @@ class Watcher:
             # sqlite3 calls block; run off the event loop so a slow disk/fsync
             # doesn't stall other markets' ticks or the health-check timer.
             await asyncio.to_thread(self._persist, market, snapshot, detections)
+
+    def _track_detector_stack_health(self, market: str, failures: int) -> None:
+        """Alert (once) when every detector has raised for several ticks in a row.
+
+        A single bad tick isn't news — each detector already gets its own
+        try/except in ``_tick`` and other markets/detectors keep running. But
+        if *all* detectors keep raising for this market, the risk aggregator
+        keeps computing over an empty detection list and silently reports
+        "calm" — indistinguishable in the logs (short of grepping for
+        tracebacks) from a genuinely quiet market. This turns that into a
+        loud, one-time alert via the normal alert sinks.
+        """
+        total = len(self.detectors)
+        if total == 0 or failures < total:
+            self._consecutive_detector_failures[market] = 0
+            self._detector_stack_alerting[market] = False
+            return
+
+        count = self._consecutive_detector_failures.get(market, 0) + 1
+        self._consecutive_detector_failures[market] = count
+        if count < _DETECTOR_STACK_FAILURE_ALERT_THRESHOLD:
+            return
+        if self._detector_stack_alerting.get(market, False):
+            return  # already alerted for this outage; stay quiet until it clears
+
+        self._detector_stack_alerting[market] = True
+        logger.error(
+            "All %d detector(s) failed for %s on %d consecutive ticks",
+            total, market, count,
+        )
+        self.alert.emit([
+            Detection(
+                detector="detector_stack_failure",
+                market=market,
+                score=1.0,
+                message=(
+                    f"All {total} detectors raised for {count} consecutive "
+                    f"ticks on {market} — detector stack is broken, not just "
+                    f"a quiet market"
+                ),
+                details={"consecutive_failures": count},
+            )
+        ])
 
     def _persist(self, market: str, snapshot, detections) -> None:
         """Blocking; call via ``asyncio.to_thread`` (only invoked when store is set)."""

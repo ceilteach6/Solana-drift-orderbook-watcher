@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
+# Hard bounds on the client-supplied `limit` query param. Without these, a
+# request like `?limit=-1` (SQLite treats a negative LIMIT as "no limit") or
+# `?limit=999999999` would pull the entire table into memory in one response,
+# holding the shared request lock for the duration — a trivial, unauthenticated
+# resource-exhaustion vector against the dashboard's own request loop (and,
+# since it shares the DB file, potential contention with the watcher's writes).
+_MIN_LIMIT = 1
+_MAX_LIMIT = 5000
+
 
 def _make_handler(store: SQLiteStore, lock: threading.Lock):
     class Handler(BaseHTTPRequestHandler):
@@ -67,6 +76,9 @@ def _make_handler(store: SQLiteStore, lock: threading.Lock):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            # Clamp rather than reject out-of-range values: a client asking for
+            # "too much" should get the max we're willing to serve, not an error.
+            limit = max(_MIN_LIMIT, min(limit, _MAX_LIMIT))
 
             if route in ("/", "/index.html"):
                 return self._send_html()

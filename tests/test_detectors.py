@@ -160,6 +160,18 @@ def test_imbalance_quiet_on_empty_book():
     assert det.analyze(snap(), []) == []
 
 
+def test_imbalance_quiet_when_one_side_totally_empty():
+    # A thin/illiquid book with zero resting asks would otherwise peg the raw
+    # ratio at score 1.0 forever -- that's not manipulative pressure, it's a
+    # book with nothing on the other side to compare against.
+    det = ImbalanceDetector(make_settings(imbalance_min_ratio=0.85, imbalance_min_levels=5))
+    s = snap(
+        bids=[(100 - i, 10.0) for i in range(5)],
+        asks=[],
+    )
+    assert det.analyze(s, []) == []
+
+
 # --------------------------------------------------------------------------- #
 # Spoof-pull
 # --------------------------------------------------------------------------- #

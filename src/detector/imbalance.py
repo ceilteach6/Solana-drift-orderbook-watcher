@@ -22,11 +22,18 @@ class ImbalanceDetector(BaseDetector):
 
     def analyze(self, snapshot, history) -> list[Detection]:
         n = self.settings.imbalance_min_levels
-        bid_vol = sum(lvl.size for lvl in snapshot.bids[:n] if lvl.size > 0)
-        ask_vol = sum(lvl.size for lvl in snapshot.asks[:n] if lvl.size > 0)
-        total = bid_vol + ask_vol
-        if total <= 0:
+        bid_sizes = [lvl.size for lvl in snapshot.bids[:n] if lvl.size > 0]
+        ask_sizes = [lvl.size for lvl in snapshot.asks[:n] if lvl.size > 0]
+        # Both sides need at least one resting level to compare. A side with
+        # zero levels (thin/illiquid market, e.g. right after listing) isn't
+        # "manipulative one-sided pressure" -- it's a book with nothing to be
+        # imbalanced against -- but the raw ratio below would otherwise peg at
+        # score 1.0 forever, firing every tick on a market that's just quiet.
+        if not bid_sizes or not ask_sizes:
             return []
+        bid_vol = sum(bid_sizes)
+        ask_vol = sum(ask_sizes)
+        total = bid_vol + ask_vol
 
         imbalance = (bid_vol - ask_vol) / total
         if abs(imbalance) < self.settings.imbalance_min_ratio:
