@@ -120,6 +120,14 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Replay / backtesting
+With `STORAGE_ENABLED=true` **and** `PERSIST_SNAPSHOTS=true` during a prior
+run, re-run the current detector stack over the recorded L2 books instead of
+a live feed — useful for tuning thresholds against real history:
+```bash
+python main.py --replay SOL-PERP [--limit 5000]
+```
+
 ---
 
 ## 🔧 How the Drift integration works

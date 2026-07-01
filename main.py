@@ -19,6 +19,10 @@ Inspect the stored time-series (row counts + recent detections):
 
 Serve the charting dashboard (reads the stored time-series):
   python main.py --dashboard
+
+Replay/backtest the detector stack over persisted L2 history (requires a
+prior run with STORAGE_ENABLED=true and PERSIST_SNAPSHOTS=true):
+  python main.py --replay SOL-PERP [--limit 5000]
 """
 
 import asyncio
@@ -52,6 +56,24 @@ if __name__ == "__main__":
         from src.dashboard import run_dashboard
 
         sys.exit(run_dashboard(settings))
+
+    if "--replay" in sys.argv[1:]:
+        from src.replay import replay_main
+
+        argv = sys.argv[1:]
+        idx = argv.index("--replay")
+        market = argv[idx + 1] if idx + 1 < len(argv) and not argv[idx + 1].startswith("--") else None
+        if market is None:
+            print("Usage: python main.py --replay MARKET [--limit N]")
+            sys.exit(1)
+        limit = 5000
+        if "--limit" in argv:
+            lidx = argv.index("--limit")
+            if lidx + 1 >= len(argv):
+                print("Usage: python main.py --replay MARKET [--limit N]")
+                sys.exit(1)
+            limit = int(argv[lidx + 1])
+        sys.exit(replay_main(settings, market, limit))
 
     try:
         asyncio.run(main())

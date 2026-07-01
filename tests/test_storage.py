@@ -137,3 +137,21 @@ def test_record_tick_with_no_detections_and_no_risk_is_noop(tmp_path):
     store.record_tick(ts=1.0)
     assert store.counts() == {"snapshots": 0, "detections": 0, "risk": 0}
     store.close()
+
+
+def test_read_snapshots_roundtrips_bids_and_asks_chronologically(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(ts=2.0))
+    store.record_snapshot(snap(ts=1.0))
+    rows = store.read_snapshots("SOL-PERP")
+    assert [r["ts"] for r in rows] == [1.0, 2.0]
+    assert rows[0]["bids"] == [[100.0, 5.0], [99.9, 3.0]]
+    assert rows[0]["asks"] == [[100.1, 4.0], [100.2, 2.0]]
+    store.close()
+
+
+def test_read_snapshots_for_unknown_market_is_empty(tmp_path):
+    store = make_store(tmp_path)
+    store.record_snapshot(snap(market="SOL-PERP"))
+    assert store.read_snapshots("BTC-PERP") == []
+    store.close()

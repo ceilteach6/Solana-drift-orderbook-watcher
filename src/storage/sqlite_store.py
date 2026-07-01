@@ -214,6 +214,29 @@ class SQLiteStore(Store):
             for r in rows
         ]
 
+    def read_snapshots(self, market: str, limit: int = 5000) -> list[dict]:
+        """Return up to ``limit`` persisted L2 snapshots for ``market``,
+        oldest first — the raw material for replay/backtesting.
+
+        Only populated when ``PERSIST_SNAPSHOTS=true`` was set during the
+        recording run (the ``snapshots`` table is otherwise empty).
+        """
+        cur = self._conn.execute(
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = list(cur.fetchall())
+        rows.reverse()  # chronological, oldest first
+        return [
+            {
+                "ts": r["ts"],
+                "bids": json.loads(r["bids"]),
+                "asks": json.loads(r["asks"]),
+            }
+            for r in rows
+        ]
+
     # ------------------------------------------------------------------ #
     def counts(self) -> dict[str, int]:
         out = {}
