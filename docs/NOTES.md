@@ -45,6 +45,8 @@ kész; csak az értékeket kell beírnod.
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
+| `config/settings.py` — központi `.env` validáció (fail-fast, `ConfigError`) | ✅ kész (új) |
+| `src/watcher.py` — feed-önjavítás (reconnect ismétlődő hibánál + szintetikus→valós visszaváltás) | ✅ kész (új) |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
 
@@ -78,6 +80,19 @@ nem avatkozik be. Prioritás szerinti felépítés:
 - **Dashboard** (`src/dashboard/`) — stdlib HTTP szerver + TradingView
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
+
+### Megbízhatóság / hosszútávú javítások ✅ (új)
+- **Config validáció** (`config/settings.py`) — a `.env` érvénytelen értékeit
+  (pl. `IMBALANCE_MIN_RATIO > 1` → a detektor sosem sülne el; `SPOOF_MIN_PRICE_MOVE=0`
+  → `ZeroDivisionError`) most **egy helyen, indításkor** kapja el egy
+  `ConfigError`-ral, világos üzenettel — nem elszórt, ad-hoc védelmekkel az
+  egyes detektorokban. Lásd `tests/test_settings.py`.
+- **Feed-önjavítás** (`src/watcher.py`) — ha a valós Drift-feed egymás után
+  többször (5×) hibázik egy piacon, a watcher **újraépíti a kapcsolatot**
+  ahelyett, hogy egy halott subscription-t pollozna a végtelenségig. Ha
+  indításkor a szintetikus (demo) feedre esett vissza, percenként **visszapróbálja
+  a valós feedet** — így egy átmeneti RPC-kiesés nem ragasztja a folyamatot
+  örökre demo-adatra. Lásd `tests/test_watcher_feed_resilience.py`.
 
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.

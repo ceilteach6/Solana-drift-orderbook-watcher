@@ -12,6 +12,7 @@ Import the ready-to-use singleton:
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -21,6 +22,12 @@ try:
     load_dotenv()  # loads a local .env if one exists; harmless otherwise
 except Exception:  # pragma: no cover - dotenv is optional at runtime
     pass
+
+logger = logging.getLogger(__name__)
+
+
+class ConfigError(ValueError):
+    """Raised when a `.env` / environment value is out of range or unusable."""
 
 
 def _get_int(name: str, default: int) -> int:
@@ -95,6 +102,96 @@ class Settings:
 
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Fail fast on out-of-range config instead of letting a detector or
+        the risk aggregator misbehave (silently never fire, or crash on a
+        division) somewhere downstream, at an arbitrary point at runtime.
+
+        Centralizing the checks here means every detector can trust the
+        settings it receives — no per-detector defensive clamping needed.
+        """
+        errors: list[str] = []
+
+        def require(cond: bool, msg: str) -> None:
+            if not cond:
+                errors.append(msg)
+
+        require(bool(self.markets), "MARKETS must not be empty")
+        require(self.orderbook_depth > 0, "ORDERBOOK_DEPTH must be > 0")
+        require(self.update_frequency_ms > 0, "UPDATE_FREQUENCY_MS must be > 0")
+
+        require(self.repeated_min_count >= 2, "REPEATED_MIN_COUNT must be >= 2")
+        require(
+            0 <= self.repeated_size_tolerance < 1,
+            "REPEATED_SIZE_TOLERANCE must be in [0, 1)",
+        )
+        require(self.layering_min_levels >= 2, "LAYERING_MIN_LEVELS must be >= 2")
+        require(self.flicker_window_sec > 0, "FLICKER_WINDOW_SEC must be > 0")
+        require(self.flicker_min_events >= 1, "FLICKER_MIN_EVENTS must be >= 1")
+        require(
+            0 < self.imbalance_min_ratio <= 1,
+            "IMBALANCE_MIN_RATIO must be in (0, 1] — it is compared against "
+            "|bid_vol-ask_vol|/(bid_vol+ask_vol), which never exceeds 1, so a "
+            "larger value would mean the detector can never fire",
+        )
+        require(self.imbalance_min_levels >= 1, "IMBALANCE_MIN_LEVELS must be >= 1")
+        require(self.spoof_window_sec > 0, "SPOOF_WINDOW_SEC must be > 0")
+        require(self.spoof_wall_ratio > 1, "SPOOF_WALL_RATIO must be > 1")
+        require(
+            self.spoof_min_price_move > 0,
+            "SPOOF_MIN_PRICE_MOVE must be > 0 (it is used as a divisor in the "
+            "spoof-pull detector; 0 would crash it)",
+        )
+        require(
+            0 < self.spoof_pull_fraction <= 1,
+            "SPOOF_PULL_FRACTION must be in (0, 1]",
+        )
+
+        require(
+            0 < self.risk_smoothing <= 1,
+            "RISK_SMOOTHING must be in (0, 1] — 0 would freeze the smoothed "
+            "risk score at 0 forever and alerts would never fire",
+        )
+        require(
+            0 <= self.risk_clear_threshold < self.risk_alert_threshold <= 1,
+            "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD (both within "
+            "[0, 1]) or the alert hysteresis can never clear or never fire",
+        )
+        require(
+            self.risk_alert_cooldown_sec >= 0,
+            "RISK_ALERT_COOLDOWN_SEC must be >= 0",
+        )
+
+        require(
+            self.healthcheck_interval_sec > 0,
+            "HEALTHCHECK_INTERVAL_SEC must be > 0",
+        )
+        require(0 <= self.alert_min_score <= 1, "ALERT_MIN_SCORE must be in [0, 1]")
+        require(
+            self.alert_format in ("console", "json"),
+            "ALERT_FORMAT must be 'console' or 'json'",
+        )
+        require(self.dashboard_port > 0, "DASHBOARD_PORT must be > 0")
+        require(self.run_duration_sec >= 0, "RUN_DURATION_SEC must be >= 0")
+
+        if errors:
+            details = "\n".join(f"  - {e}" for e in errors)
+            raise ConfigError(
+                f"Invalid configuration ({len(errors)} problem"
+                f"{'s' if len(errors) != 1 else ''} found in your .env / "
+                f"environment):\n{details}"
+            )
+
+        # Soft warnings: not fatal, but worth flagging.
+        if self.alert_webhook_url and not self.alert_webhook_url.startswith("https://"):
+            logger.warning(
+                "ALERT_WEBHOOK_URL does not use https:// — alerts would be sent "
+                "unencrypted over the network."
+            )
 
 
 def load_settings() -> Settings:

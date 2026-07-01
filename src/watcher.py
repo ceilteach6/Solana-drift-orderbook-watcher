@@ -16,7 +16,7 @@ import time
 from collections import deque
 
 from src.alert import AlertDispatcher, build_alert_sinks
-from src.collector.orderbook_feed import create_feed
+from src.collector.orderbook_feed import SyntheticOrderbookFeed, create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
 from src.risk import RiskAggregator
@@ -24,6 +24,16 @@ from src.selftest import run_selftest
 from src.storage import SQLiteStore
 
 logger = logging.getLogger(__name__)
+
+# A dead websocket subscription doesn't raise once and go quiet — it raises on
+# every subsequent poll. This many consecutive failures (for any one market)
+# means the feed itself is gone, not a one-off network blip, so we rebuild it.
+_MAX_CONSECUTIVE_FEED_FAILURES = 5
+
+# If we started on (or fell back to) the synthetic feed, retry the real feed
+# on this cadence so a transient RPC/driftpy outage at startup doesn't pin the
+# watcher to fake data for the rest of the run.
+_FEED_UPGRADE_RETRY_SEC = 60.0
 
 
 class Watcher:
@@ -35,6 +45,8 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        self._last_feed_upgrade_attempt: float = 0.0
+        self._consecutive_failures: dict[str, int] = {}
 
         # Keep enough history per market to cover the flicker window.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
@@ -58,6 +70,9 @@ class Watcher:
         if self.store is not None:
             self.store.connect()
         self.feed = await create_feed(self.settings)
+        # create_feed() just made its one connect attempt; don't immediately
+        # retry it again on the first loop iteration.
+        self._last_feed_upgrade_attempt = time.monotonic()
         try:
             await self._run_loop()
         finally:
@@ -76,6 +91,7 @@ class Watcher:
                 await self._tick(market)
 
             self._maybe_healthcheck()
+            await self._maybe_retry_real_feed()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
@@ -111,7 +127,9 @@ class Watcher:
             snapshot = await self.feed.get_snapshot(market)
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            await self._on_feed_failure(market)
             return
+        self._consecutive_failures[market] = 0
         if snapshot is None:
             return
 
@@ -134,6 +152,58 @@ class Watcher:
             self.alert.emit(detections)
 
         self._persist(market, snapshot, detections)
+
+    async def _on_feed_failure(self, market: str) -> None:
+        """Rebuild the feed once a market's polls fail repeatedly in a row.
+
+        A single failed poll is normal network noise (handled by ``_tick``'s
+        try/except). Many in a row for the same market means the underlying
+        subscription is dead — retrying it forever without reconnecting would
+        just poll a corpse until the process is restarted by hand.
+        """
+        failures = self._consecutive_failures.get(market, 0) + 1
+        self._consecutive_failures[market] = failures
+        if failures < _MAX_CONSECUTIVE_FEED_FAILURES:
+            return
+        logger.warning(
+            "%d consecutive snapshot failures for %s — reconnecting the feed.",
+            failures, market,
+        )
+        await self._reconnect_feed()
+
+    async def _maybe_retry_real_feed(self) -> None:
+        """If we're on the synthetic fallback, periodically retry the real feed."""
+        if not isinstance(self.feed, SyntheticOrderbookFeed):
+            return
+        now = time.monotonic()
+        if now - self._last_feed_upgrade_attempt < _FEED_UPGRADE_RETRY_SEC:
+            return
+        self._last_feed_upgrade_attempt = now
+        logger.info("Still on the synthetic feed — retrying the real Drift feed...")
+        await self._reconnect_feed()
+        if not isinstance(self.feed, SyntheticOrderbookFeed):
+            logger.info("Reconnected to the real Drift feed.")
+
+    async def _reconnect_feed(self) -> None:
+        """Build a fresh feed and swap it in, closing the old one on success.
+
+        ``create_feed`` already prefers the real feed and falls back to
+        synthetic, so this single call covers both recovery paths: a dead
+        real-feed subscription gets rebuilt, and a synthetic fallback gets a
+        fresh chance to reach the real feed.
+        """
+        try:
+            new_feed = await create_feed(self.settings)
+        except Exception:
+            logger.exception("Feed reconnect failed; keeping the previous feed.")
+            return
+        old_feed, self.feed = self.feed, new_feed
+        self._consecutive_failures.clear()
+        if old_feed is not None:
+            try:
+                await old_feed.close()
+            except Exception:
+                logger.debug("Error closing previous feed", exc_info=True)
 
     def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:
