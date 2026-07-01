@@ -111,3 +111,22 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_write_before_connect_raises_clear_error(tmp_path):
+    store = SQLiteStore(str(tmp_path / "unopened.db"))
+    try:
+        store.record_risk("SOL-PERP", 1.0, 0.5)
+        assert False, "expected a RuntimeError"
+    except RuntimeError as exc:
+        assert "connect()" in str(exc)
+
+
+def test_write_after_close_raises_clear_error(tmp_path):
+    store = make_store(tmp_path)
+    store.close()
+    try:
+        store.record_risk("SOL-PERP", 1.0, 0.5)
+        assert False, "expected a RuntimeError"
+    except RuntimeError as exc:
+        assert "connect()" in str(exc)

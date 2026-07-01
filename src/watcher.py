@@ -36,9 +36,14 @@ class Watcher:
         self.feed = None
         self._last_healthcheck: float = 0.0
 
-        # Keep enough history per market to cover the flicker window.
+        # Keep enough history per market to cover the flicker window, capped
+        # so a misconfigured (tiny interval / huge window) pair can't grow
+        # each market's buffer without bound.
         interval = max(settings.update_frequency_ms / 1000, 0.001)
-        history_len = max(8, int(settings.flicker_window_sec / interval) + 4)
+        MAX_HISTORY_LEN = 5000
+        history_len = min(
+            MAX_HISTORY_LEN, max(8, int(settings.flicker_window_sec / interval) + 4)
+        )
         self._history: dict[str, deque] = {
             market: deque(maxlen=history_len) for market in settings.markets
         }

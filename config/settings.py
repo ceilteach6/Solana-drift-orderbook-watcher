@@ -23,14 +23,32 @@ except Exception:  # pragma: no cover - dotenv is optional at runtime
     pass
 
 
+class ConfigError(ValueError):
+    """Raised when an environment variable holds a value we can't parse."""
+
+
 def _get_int(name: str, default: int) -> int:
     raw = os.getenv(name)
-    return int(raw) if raw not in (None, "") else default
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ConfigError(
+            f"Environment variable {name}={raw!r} is not a valid integer"
+        ) from None
 
 
 def _get_float(name: str, default: float) -> float:
     raw = os.getenv(name)
-    return float(raw) if raw not in (None, "") else default
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ConfigError(
+            f"Environment variable {name}={raw!r} is not a valid number"
+        ) from None
 
 
 def _get_str(name: str, default: str) -> str:

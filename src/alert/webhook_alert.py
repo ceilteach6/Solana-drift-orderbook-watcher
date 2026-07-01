@@ -55,7 +55,23 @@ class WebhookAlert(Alert):
             with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
                 resp.read()
         except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+            logger.warning(
+                "Webhook delivery failed (%s): %s",
+                self._target(),
+                self._redact(str(exc)),
+            )
+
+    def _redact(self, text: str) -> str:
+        """Strip any secret (bot token / webhook URL) from exception text
+        before it reaches logs — urllib errors sometimes echo the request URL,
+        which embeds the Telegram bot token."""
+        token = getattr(self.settings, "telegram_bot_token", "")
+        if token:
+            text = text.replace(token, "***")
+        url = getattr(self.settings, "alert_webhook_url", "")
+        if url:
+            text = text.replace(url, "***")
+        return text
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:

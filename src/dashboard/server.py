@@ -62,10 +62,14 @@ def _make_handler(db_path: str):
             route = parsed.path
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
+            MAX_LIMIT = 5000
             try:
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            if limit <= 0:
+                return self._send_json({"error": "limit must be positive"}, 400)
+            limit = min(limit, MAX_LIMIT)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
