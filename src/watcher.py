@@ -101,21 +101,26 @@ class Watcher:
             return
         self._last_healthcheck = now
 
-        results = run_selftest(self.settings)
-        failed = [r.name for r in results if not r.passed]
-        if failed:
-            logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
-            self.alert.emit([
-                Detection(
-                    detector="healthcheck",
-                    market="-",
-                    score=1.0,
-                    message=f"Self-test failed: {', '.join(failed)} not firing",
-                    details={"failed": failed},
-                )
-            ])
-        else:
-            logger.debug("Health-check OK (%d checks passed)", len(results))
+        try:
+            results = run_selftest(self.settings)
+            failed = [r.name for r in results if not r.passed]
+            if failed:
+                logger.warning("Health-check FAILED: %s not firing", ", ".join(failed))
+                self.alert.emit([
+                    Detection(
+                        detector="healthcheck",
+                        market="-",
+                        score=1.0,
+                        message=f"Self-test failed: {', '.join(failed)} not firing",
+                        details={"failed": failed},
+                    )
+                ])
+            else:
+                logger.debug("Health-check OK (%d checks passed)", len(results))
+        except Exception:
+            # A broken self-test or alert sink must not take down the poll
+            # loop for every market — log and let the next cycle retry.
+            logger.exception("Health-check cycle failed")
 
     async def _tick(self, market: str) -> None:
         try:
@@ -135,14 +140,19 @@ class Watcher:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
 
-        if self.aggregator is not None:
-            # Consolidate into a single smoothed risk signal per market.
-            risk = self.aggregator.update(market, snapshot.timestamp, detections)
-            if risk is not None:
-                self.alert.emit([risk])
-        elif detections:
-            # Raw mode: one alert per detection.
-            self.alert.emit(detections)
+        try:
+            if self.aggregator is not None:
+                # Consolidate into a single smoothed risk signal per market.
+                risk = self.aggregator.update(market, snapshot.timestamp, detections)
+                if risk is not None:
+                    self.alert.emit([risk])
+            elif detections:
+                # Raw mode: one alert per detection.
+                self.alert.emit(detections)
+        except Exception:
+            # A malformed Detection or a broken alert sink must not kill the
+            # whole watcher — persistence below should still run.
+            logger.exception("Risk aggregation / alert emission failed for %s", market)
 
         await self._persist(market, snapshot, detections)
 

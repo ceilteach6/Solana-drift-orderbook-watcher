@@ -166,6 +166,14 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
 
     bids = levels(getattr(l2, "bids", None) or [])
     asks = levels(getattr(l2, "asks", None) or [])
+    # Every downstream consumer (mid price, best_bid/ask, spread, the
+    # imbalance detector's top-N slice) assumes bids are descending and asks
+    # ascending. driftpy's DLOB conventionally returns levels in that order,
+    # but nothing in this module verified it — sort defensively so a future
+    # driftpy release (or an unconventional DLOB response) can't silently
+    # corrupt every price-derived signal.
+    bids.sort(key=lambda lvl: lvl.price, reverse=True)
+    asks.sort(key=lambda lvl: lvl.price)
     return OrderbookSnapshot(market=market, timestamp=time.time(), bids=bids, asks=asks)
 
 

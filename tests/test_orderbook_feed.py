@@ -40,6 +40,26 @@ def test_snapshot_from_driftpy_descales_raw_fixed_point_integers():
     assert snap.asks[0].size == 8.0
 
 
+def test_snapshot_from_driftpy_sorts_levels_regardless_of_input_order():
+    # Every downstream consumer (mid, best_bid/ask, spread, the imbalance
+    # detector's top-N slice) assumes bids are descending and asks ascending.
+    # Don't trust driftpy's DLOB to hand levels back in that order already —
+    # sort defensively so an out-of-order response can't silently corrupt
+    # every price-derived signal.
+    l2 = SimpleNamespace(
+        bids=[_lvl(100 * PRICE_PRECISION, 1 * BASE_PRECISION),
+              _lvl(102 * PRICE_PRECISION, 1 * BASE_PRECISION),
+              _lvl(101 * PRICE_PRECISION, 1 * BASE_PRECISION)],
+        asks=[_lvl(106 * PRICE_PRECISION, 1 * BASE_PRECISION),
+              _lvl(104 * PRICE_PRECISION, 1 * BASE_PRECISION),
+              _lvl(105 * PRICE_PRECISION, 1 * BASE_PRECISION)],
+    )
+    snap = _snapshot_from_driftpy("SOL-PERP", l2)
+
+    assert [lvl.price for lvl in snap.bids] == [102.0, 101.0, 100.0]
+    assert [lvl.price for lvl in snap.asks] == [104.0, 105.0, 106.0]
+
+
 def test_snapshot_from_driftpy_handles_dict_levels():
     l2 = SimpleNamespace(
         bids=[{"price": 100 * PRICE_PRECISION, "size": 5 * BASE_PRECISION}],
