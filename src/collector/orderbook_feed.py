@@ -100,15 +100,27 @@ class DriftOrderbookFeed(OrderbookFeed):
             await self._stack.close()
 
 
-def _to_float(value) -> float:
-    """driftpy L2 levels carry scaled integers; normalize to floats."""
-    # driftpy uses PRICE_PRECISION (1e6) and BASE_PRECISION (1e9). The L2
-    # helpers usually expose ``price`` / ``size`` attributes already; we coerce
-    # defensively so version differences don't crash the watcher.
+try:
+    # Drift fixed-point scaling: prices are integers scaled by 1e6, base
+    # asset amounts (sizes) by 1e9. driftpy exposes these as constants, but
+    # we don't hard-depend on the package being installed/importable.
+    from driftpy.constants.numeric_constants import BASE_PRECISION, PRICE_PRECISION
+except ImportError:  # pragma: no cover - exercised when driftpy is absent
+    PRICE_PRECISION = 1_000_000
+    BASE_PRECISION = 1_000_000_000
+
+
+def _to_float(value, precision: int) -> float:
+    """driftpy L2 levels carry fixed-point integers scaled by ``precision``.
+
+    e.g. a $150 price is the raw int 150_000_000 (PRICE_PRECISION=1e6); a
+    10-token size is the raw int 10_000_000_000 (BASE_PRECISION=1e9).
+    """
     try:
-        return float(value)
+        raw = float(value)
     except (TypeError, ValueError):
-        return float(getattr(value, "value", 0))
+        raw = float(getattr(value, "value", 0))
+    return raw / precision
 
 
 def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
@@ -119,7 +131,7 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
-            out.append(Level(_to_float(price), _to_float(size)))
+            out.append(Level(_to_float(price, PRICE_PRECISION), _to_float(size, BASE_PRECISION)))
         return out
 
     # Every consumer (mid price, detectors, storage) assumes bids[0]/asks[0]
