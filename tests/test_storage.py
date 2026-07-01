@@ -111,3 +111,27 @@ def test_persistence_across_reopen(tmp_path):
     reopened.connect()
     assert reopened.counts()["risk"] == 1
     reopened.close()
+
+
+def test_record_tick_writes_detections_and_risk_in_one_transaction(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(), [det("imbalance", 0.9)], risk=0.5)
+    assert store.counts() == {"snapshots": 0, "detections": 1, "risk": 1}
+    store.close()
+
+
+def test_record_tick_persists_snapshot_only_when_requested(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(), [], risk=None, persist_snapshot=True)
+    assert store.counts()["snapshots"] == 1
+    store.close()
+
+
+def test_record_tick_visible_without_explicit_commit(tmp_path):
+    # record_tick batches writes into a single commit; readers on the same
+    # connection must still see the rows without the caller calling close().
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(), [det()], risk=0.4)
+    assert store.counts()["detections"] == 1
+    assert store.counts()["risk"] == 1
+    store.close()

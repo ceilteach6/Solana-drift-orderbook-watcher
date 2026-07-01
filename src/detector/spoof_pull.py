@@ -41,32 +41,50 @@ class SpoofPullDetector(BaseDetector):
             return []
 
         mid_now = snapshot.mid
-        mid_then = prior[0].mid
-        if not mid_now or not mid_then:
-            return []
-        price_move = (mid_now - mid_then) / mid_then
-        if abs(price_move) < self.settings.spoof_min_price_move:
+        if not mid_now:
             return []
 
-        previous = prior[-1]  # the snapshot just before the current one
+        # For each side, consider every prior snapshot as a possible "wall was
+        # here" reference point (not just the immediately-preceding tick).
+        # This ties the price-move check to the *same* interval the wall
+        # disappeared over, instead of conflating a short pull event with an
+        # unrelated price drift measured across the whole window.
         detections: list[Detection] = []
-        for side, prev_levels, cur_levels in (
-            ("bid", previous.bids, snapshot.bids),
-            ("ask", previous.asks, snapshot.asks),
+        for side, prev_attr, cur_levels in (
+            ("bid", "bids", snapshot.bids),
+            ("ask", "asks", snapshot.asks),
         ):
-            wall = self._find_wall(prev_levels)
-            if wall is None:
+            best: tuple[float, float, float, float, float] | None = None
+            for prior_snap in prior:
+                mid_then = prior_snap.mid
+                if not mid_then:
+                    continue
+                price_move = (mid_now - mid_then) / mid_then
+                if abs(price_move) < self.settings.spoof_min_price_move:
+                    continue
+
+                wall = self._find_wall(getattr(prior_snap, prev_attr))
+                if wall is None:
+                    continue
+                price_key, wall_size = wall
+
+                now_size = self._size_at(cur_levels, price_key)
+                if now_size >= wall_size * self.settings.spoof_pull_fraction:
+                    continue  # wall is still (mostly) there — not pulled
+
+                pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
+                move_factor = min(
+                    1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move)
+                )
+                score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
+
+                candidate = (score, price_key, wall_size, now_size, price_move)
+                if best is None or score > best[0]:
+                    best = candidate
+
+            if best is None:
                 continue
-            price_key, wall_size = wall
-
-            now_size = self._size_at(cur_levels, price_key)
-            if now_size >= wall_size * self.settings.spoof_pull_fraction:
-                continue  # wall is still (mostly) there — not pulled
-
-            pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
-            move_factor = min(1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move))
-            score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
-
+            score, price_key, wall_size, now_size, price_move = best
             detections.append(
                 Detection(
                     detector=self.name,

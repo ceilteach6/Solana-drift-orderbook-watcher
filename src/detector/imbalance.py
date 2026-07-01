@@ -25,7 +25,10 @@ class ImbalanceDetector(BaseDetector):
         bid_vol = sum(lvl.size for lvl in snapshot.bids[:n] if lvl.size > 0)
         ask_vol = sum(lvl.size for lvl in snapshot.asks[:n] if lvl.size > 0)
         total = bid_vol + ask_vol
-        if total <= 0:
+        # A near-empty side (e.g. one lone tiny order) skews the ratio to
+        # near ±1 even though it's thin liquidity, not one-sided pressure.
+        min_total = getattr(self.settings, "imbalance_min_total_volume", 0.0)
+        if total <= 0 or total < min_total:
             return []
 
         imbalance = (bid_vol - ask_vol) / total

@@ -12,8 +12,10 @@ Import the ready-to-use singleton:
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
@@ -21,6 +23,33 @@ try:
     load_dotenv()  # loads a local .env if one exists; harmless otherwise
 except Exception:  # pragma: no cover - dotenv is optional at runtime
     pass
+
+
+def _validate_webhook_url(url: str, *, allow_private_host: bool) -> None:
+    """Fail fast on a misconfigured/unsafe webhook URL rather than letting a
+    bad ``.env`` value silently fire requests at an unintended target (e.g.
+    a `file://` handler misuse, or the cloud metadata endpoint) at runtime.
+    """
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"ALERT_WEBHOOK_URL must use http:// or https:// (got {parsed.scheme!r})"
+        )
+    if not parsed.hostname:
+        raise ValueError("ALERT_WEBHOOK_URL is missing a host")
+    if allow_private_host:
+        return
+    try:
+        ip = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return  # a DNS hostname; can't cheaply classify without a lookup
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        raise ValueError(
+            f"ALERT_WEBHOOK_URL points at a private/internal address ({parsed.hostname}); "
+            "set ALERT_WEBHOOK_ALLOW_PRIVATE_HOST=true if this is intentional"
+        )
 
 
 def _get_int(name: str, default: int) -> int:
@@ -51,6 +80,7 @@ class Settings:
     markets: list[str] = field(default_factory=list)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
+    snapshot_timeout_sec: float = 5.0
 
     # --- Detector thresholds ---
     repeated_min_count: int = 4
@@ -60,6 +90,7 @@ class Settings:
     flicker_min_events: int = 3
     imbalance_min_ratio: float = 0.85
     imbalance_min_levels: int = 5
+    imbalance_min_total_volume: float = 0.0  # 0 = disabled (no liquidity floor)
     spoof_window_sec: float = 10.0
     spoof_wall_ratio: float = 5.0
     spoof_min_price_move: float = 0.001
@@ -90,11 +121,25 @@ class Settings:
     alert_format: str = "console"
     # Webhook credentials/links are the user's part (see docs/NOTES.md).
     alert_webhook_url: str = ""
+    alert_webhook_allow_private_host: bool = False
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
     # --- Run control ---
     run_duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        # Hysteresis in RiskAggregator requires clear < alert, or the
+        # "alerting" state never clears and cooldown becomes the only gate.
+        if self.risk_clear_threshold >= self.risk_alert_threshold:
+            raise ValueError(
+                "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
+                f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
+            )
+        _validate_webhook_url(
+            self.alert_webhook_url,
+            allow_private_host=self.alert_webhook_allow_private_host,
+        )
 
 
 def load_settings() -> Settings:
@@ -109,6 +154,7 @@ def load_settings() -> Settings:
         markets=markets or ["SOL-PERP"],
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
+        snapshot_timeout_sec=_get_float("SNAPSHOT_TIMEOUT_SEC", 5.0),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
         repeated_size_tolerance=_get_float("REPEATED_SIZE_TOLERANCE", 0.001),
         layering_min_levels=_get_int("LAYERING_MIN_LEVELS", 5),
@@ -116,6 +162,7 @@ def load_settings() -> Settings:
         flicker_min_events=_get_int("FLICKER_MIN_EVENTS", 3),
         imbalance_min_ratio=_get_float("IMBALANCE_MIN_RATIO", 0.85),
         imbalance_min_levels=_get_int("IMBALANCE_MIN_LEVELS", 5),
+        imbalance_min_total_volume=_get_float("IMBALANCE_MIN_TOTAL_VOLUME", 0.0),
         spoof_window_sec=_get_float("SPOOF_WINDOW_SEC", 10.0),
         spoof_wall_ratio=_get_float("SPOOF_WALL_RATIO", 5.0),
         spoof_min_price_move=_get_float("SPOOF_MIN_PRICE_MOVE", 0.001),
@@ -139,6 +186,9 @@ def load_settings() -> Settings:
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),
+        alert_webhook_allow_private_host=_get_str(
+            "ALERT_WEBHOOK_ALLOW_PRIVATE_HOST", "false"
+        ).lower() in ("1", "true", "yes", "on"),
         telegram_bot_token=_get_str("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_get_str("TELEGRAM_CHAT_ID", ""),
         run_duration_sec=_get_float("RUN_DURATION_SEC", 0.0),

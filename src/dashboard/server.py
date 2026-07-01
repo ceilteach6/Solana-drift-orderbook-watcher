@@ -29,6 +29,7 @@ from src.storage import SQLiteStore
 logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
+_MAX_LIMIT = 5000
 
 
 def _make_handler(db_path: str):
@@ -66,6 +67,9 @@ def _make_handler(db_path: str):
                 limit = int((params.get("limit") or ["2000"])[0])
             except (ValueError, TypeError):
                 return self._send_json({"error": "limit must be an integer"}, 400)
+            if limit <= 0:
+                return self._send_json({"error": "limit must be positive"}, 400)
+            limit = min(limit, _MAX_LIMIT)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
