@@ -57,23 +57,27 @@ class Watcher:
             datefmt="%H:%M:%S",
         )
         self._banner()
-        if self.store is not None:
-            try:
-                self.store.connect()
-            except Exception:
-                # Persistence is an optional add-on (detectors/alerts still run
-                # without it) — degrade instead of taking the whole watcher down
-                # over e.g. a permissions error or a locked db file.
-                logger.exception(
-                    "Storage init failed (%s) — continuing without persistence.",
-                    self.settings.db_path,
-                )
-                self.store = None
-        self.feed = await create_feed(self.settings)
         try:
+            if self.store is not None:
+                try:
+                    self.store.connect()
+                except Exception:
+                    # Persistence is an optional add-on (detectors/alerts still run
+                    # without it) — degrade instead of taking the whole watcher down
+                    # over e.g. a permissions error or a locked db file.
+                    logger.exception(
+                        "Storage init failed (%s) — continuing without persistence.",
+                        self.settings.db_path,
+                    )
+                    self.store = None
+            self.feed = await create_feed(self.settings)
             await self._run_loop()
         finally:
-            await self.feed.close()
+            # Guard each teardown independently: an interrupt (e.g. Ctrl+C)
+            # can land while either resource is still being set up, so
+            # `self.feed`/`self.store` may be None or already assigned.
+            if self.feed is not None:
+                await self.feed.close()
             if self.store is not None:
                 self.store.close()
 

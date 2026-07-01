@@ -51,6 +51,11 @@ class Settings:
     markets: tuple[str, ...] = field(default_factory=tuple)
     orderbook_depth: int = 20
     update_frequency_ms: int = 1000
+    # If the real Drift feed's L2 book is byte-for-byte identical across polls
+    # for longer than this, the DLOB subscriber's background update loop has
+    # likely died (driftpy keeps serving the same cached book with no error).
+    # 0 disables the check.
+    dlob_stale_after_sec: float = 30.0
 
     # --- Detector thresholds ---
     repeated_min_count: int = 4
@@ -110,6 +115,8 @@ class Settings:
             errors.append("ORDERBOOK_DEPTH must be > 0")
         if self.update_frequency_ms <= 0:
             errors.append("UPDATE_FREQUENCY_MS must be > 0")
+        if self.dlob_stale_after_sec < 0:
+            errors.append("DLOB_STALE_AFTER_SEC must be >= 0")
 
         if self.repeated_min_count < 2:
             errors.append("REPEATED_MIN_COUNT must be >= 2")
@@ -172,6 +179,7 @@ def load_settings() -> Settings:
         markets=tuple(markets or ["SOL-PERP"]),
         orderbook_depth=_get_int("ORDERBOOK_DEPTH", 20),
         update_frequency_ms=_get_int("UPDATE_FREQUENCY_MS", 1000),
+        dlob_stale_after_sec=_get_float("DLOB_STALE_AFTER_SEC", 30.0),
         repeated_min_count=_get_int("REPEATED_MIN_COUNT", 4),
         repeated_size_tolerance=_get_float("REPEATED_SIZE_TOLERANCE", 0.001),
         layering_min_levels=_get_int("LAYERING_MIN_LEVELS", 5),

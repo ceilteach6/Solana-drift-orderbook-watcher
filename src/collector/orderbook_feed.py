@@ -73,12 +73,25 @@ class OrderbookFeed:
 # --------------------------------------------------------------------------- #
 # Real feed (driftpy DLOB)
 # --------------------------------------------------------------------------- #
+class StaleFeedError(RuntimeError):
+    """Raised when the DLOB hasn't changed for longer than expected.
+
+    driftpy's ``DLOBSubscriber`` refreshes its cached book from a background
+    task; if that task dies (or never got scheduled), ``get_l2`` keeps
+    returning the same book forever with no error of its own — every poll
+    "succeeds", so nothing else notices. This turns that silent staleness
+    into a normal per-tick failure the watcher already logs and recovers from.
+    """
+
+
 class DriftOrderbookFeed(OrderbookFeed):
     """Reads L2 orderbooks from the live Drift DLOB via ``driftpy``."""
 
     def __init__(self, settings) -> None:
         self.settings = settings
         self._stack = None  # populated in connect()
+        self._last_book: dict[str, tuple] = {}
+        self._last_change_ts: dict[str, float] = {}
 
     async def connect(self) -> None:
         # Imported lazily so the package works without driftpy installed.
@@ -93,7 +106,31 @@ class DriftOrderbookFeed(OrderbookFeed):
         raw = self._stack.get_l2(market, depth=self.settings.orderbook_depth)
         if raw is None:
             return None
-        return _snapshot_from_driftpy(market, raw)
+        snapshot = _snapshot_from_driftpy(market, raw)
+        self._check_staleness(market, snapshot)
+        return snapshot
+
+    def _check_staleness(self, market: str, snapshot: OrderbookSnapshot) -> None:
+        max_stale = self.settings.dlob_stale_after_sec
+        if max_stale <= 0:
+            return
+        now = time.monotonic()
+        book_key = (
+            tuple((lvl.price, lvl.size) for lvl in snapshot.bids),
+            tuple((lvl.price, lvl.size) for lvl in snapshot.asks),
+        )
+        if book_key != self._last_book.get(market):
+            self._last_book[market] = book_key
+            self._last_change_ts[market] = now
+            return
+        last_change = self._last_change_ts.setdefault(market, now)
+        stale_for = now - last_change
+        if stale_for > max_stale:
+            raise StaleFeedError(
+                f"{market} DLOB unchanged for {stale_for:.0f}s "
+                f"(limit {max_stale:.0f}s) — the background DLOB update loop "
+                f"may have died; check driftpy connectivity."
+            )
 
     async def close(self) -> None:
         if self._stack is not None:

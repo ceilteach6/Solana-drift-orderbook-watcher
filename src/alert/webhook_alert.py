@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from src.alert.base import Alert
 
@@ -27,6 +28,22 @@ logger = logging.getLogger(__name__)
 
 class WebhookAlert(Alert):
     name = "webhook"
+
+    # Bounded worker pool + in-flight cap: a "one thread per alert" pattern
+    # grows without limit when the endpoint is slow/down (each delivery blocks
+    # up to the urlopen timeout), eventually hitting the OS thread/fd ceiling
+    # and starving other asyncio.to_thread work in the same process. Capping
+    # both means a dead webhook back-pressures (drops the newest alerts with a
+    # warning) instead of taking the process down.
+    _MAX_WORKERS = 2
+    _MAX_INFLIGHT = 50
+
+    def __init__(self, settings) -> None:
+        super().__init__(settings)
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._MAX_WORKERS, thread_name_prefix="webhook-alert"
+        )
+        self._inflight = threading.BoundedSemaphore(self._MAX_INFLIGHT)
 
     @staticmethod
     def is_configured(settings) -> bool:
@@ -38,13 +55,24 @@ class WebhookAlert(Alert):
         return has_telegram or has_url
 
     def deliver(self, detection) -> None:
-        """Fire HTTP delivery in a daemon thread to avoid blocking the event loop."""
+        """Queue HTTP delivery on the bounded worker pool (never blocks the caller)."""
         payload, url = self._build_request(detection)
         if not url:
             return
-        threading.Thread(
-            target=self._send, args=(payload, url), daemon=True
-        ).start()
+        if not self._inflight.acquire(blocking=False):
+            logger.warning(
+                "Webhook delivery backlog full (%d in flight) — dropping alert "
+                "for %s; endpoint may be slow or down.",
+                self._MAX_INFLIGHT, self._target(),
+            )
+            return
+        self._executor.submit(self._send_and_release, payload, url)
+
+    def _send_and_release(self, payload: dict, url: str) -> None:
+        try:
+            self._send(payload, url)
+        finally:
+            self._inflight.release()
 
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

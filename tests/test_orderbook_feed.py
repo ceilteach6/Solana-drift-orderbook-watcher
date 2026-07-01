@@ -5,11 +5,18 @@ Regression tests for the driftpy L2 -> OrderbookSnapshot conversion.
 Network-free (uses plain objects/dicts standing in for driftpy L2 levels).
 """
 
+import asyncio
+import time
 from types import SimpleNamespace
 
+import pytest
+
+from config.settings import Settings
 from src.collector.orderbook_feed import (
     BASE_PRECISION,
     PRICE_PRECISION,
+    DriftOrderbookFeed,
+    StaleFeedError,
     _snapshot_from_driftpy,
 )
 
@@ -49,3 +56,69 @@ def test_snapshot_from_driftpy_sorts_best_price_first():
     assert snap.bids[0].price == 150.0
     assert snap.asks[0].price == 151.0
     assert snap.mid == 150.5
+
+
+# --------------------------------------------------------------------------- #
+# Stale-DLOB detection
+# --------------------------------------------------------------------------- #
+class _FakeStack:
+    """Stands in for DriftStack.get_l2 — returns whatever raw L2 is set."""
+
+    def __init__(self, l2):
+        self.l2 = l2
+
+    def get_l2(self, market, depth=20):
+        return self.l2
+
+
+def make_settings(**overrides):
+    base = dict(rpc_url="http://localhost", drift_env="devnet", keypair_path="",
+                markets=("SOL-PERP",))
+    base.update(overrides)
+    return Settings(**base)
+
+
+def _l2(price=150.0):
+    return SimpleNamespace(
+        bids=[raw_level(price * PRICE_PRECISION, 1 * BASE_PRECISION)],
+        asks=[raw_level((price + 1) * PRICE_PRECISION, 1 * BASE_PRECISION)],
+    )
+
+
+def test_unchanged_book_raises_stale_feed_error_after_threshold():
+    feed = DriftOrderbookFeed(make_settings(dlob_stale_after_sec=0.05))
+    feed._stack = _FakeStack(_l2())
+
+    async def run():
+        await feed.get_snapshot("SOL-PERP")  # establishes the baseline
+        await asyncio.sleep(0.08)
+        with pytest.raises(StaleFeedError):
+            await feed.get_snapshot("SOL-PERP")
+
+    asyncio.run(run())
+
+
+def test_changing_book_never_raises_stale_feed_error():
+    feed = DriftOrderbookFeed(make_settings(dlob_stale_after_sec=0.05))
+    stack = _FakeStack(_l2(150.0))
+    feed._stack = stack
+
+    async def run():
+        for i in range(5):
+            stack.l2 = _l2(150.0 + i)  # book changes every poll
+            await feed.get_snapshot("SOL-PERP")
+            await asyncio.sleep(0.02)
+
+    asyncio.run(run())  # must not raise
+
+
+def test_zero_disables_stale_feed_check():
+    feed = DriftOrderbookFeed(make_settings(dlob_stale_after_sec=0))
+    feed._stack = _FakeStack(_l2())
+
+    async def run():
+        await feed.get_snapshot("SOL-PERP")
+        await asyncio.sleep(0.05)
+        await feed.get_snapshot("SOL-PERP")  # must not raise, check is off
+
+    asyncio.run(run())

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -30,8 +31,23 @@ logger = logging.getLogger(__name__)
 
 _INDEX_HTML = os.path.join(os.path.dirname(__file__), "index.html")
 
+# ThreadingHTTPServer spawns one native OS thread per connection with no cap.
+# Bound how many requests can be doing real work (DB queries) at once so a
+# burst of requests degrades to queueing instead of unbounded thread growth.
+_MAX_CONCURRENT_REQUESTS = 32
 
-def _make_handler(db_path: str):
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    def __init__(self, *args, max_concurrent=_MAX_CONCURRENT_REQUESTS, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._concurrency = threading.BoundedSemaphore(max_concurrent)
+
+    def process_request_thread(self, request, client_address):
+        with self._concurrency:
+            super().process_request_thread(request, client_address)
+
+
+def _make_handler(store: SQLiteStore, store_lock: threading.Lock):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet default logging
             return
@@ -75,29 +91,32 @@ def _make_handler(db_path: str):
             if route in ("/", "/index.html"):
                 return self._send_html()
 
-            # Each request opens its own short-lived read connection.
-            store = SQLiteStore(db_path)
+            # Shared connection across requests/threads: reconnecting (and
+            # re-running the full schema DDL) on every request was wasteful
+            # and, combined with ThreadingHTTPServer's unbounded thread-per-
+            # connection behavior, a real amplification vector if the
+            # dashboard is ever bound to a non-loopback host. sqlite3
+            # connections aren't safe for concurrent use from multiple
+            # threads even with check_same_thread=False, so serialize access.
             try:
-                store.connect()
-                if route == "/api/markets":
-                    return self._send_json(store.markets())
-                if route == "/api/series":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json({
-                        "price": store.price_series(market, limit),
-                        "risk": store.risk_series(market, limit),
-                    })
-                if route == "/api/detections":
-                    if not market:
-                        return self._send_json({"error": "market required"}, 400)
-                    return self._send_json(store.detection_markers(market, limit))
+                with store_lock:
+                    if route == "/api/markets":
+                        return self._send_json(store.markets())
+                    if route == "/api/series":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json({
+                            "price": store.price_series(market, limit),
+                            "risk": store.risk_series(market, limit),
+                        })
+                    if route == "/api/detections":
+                        if not market:
+                            return self._send_json({"error": "market required"}, 400)
+                        return self._send_json(store.detection_markers(market, limit))
                 return self._send_json({"error": "not found"}, 404)
             except Exception as exc:
                 logger.exception("dashboard request failed")
                 return self._send_json({"error": str(exc)}, 500)
-            finally:
-                store.close()
 
     return Handler
 
@@ -109,8 +128,10 @@ def run_dashboard(settings) -> int:
         print("   Run the watcher with STORAGE_ENABLED=true first.")
         return 1
 
-    handler = _make_handler(settings.db_path)
-    server = ThreadingHTTPServer(
+    store = SQLiteStore(settings.db_path)
+    store.connect()
+    handler = _make_handler(store, threading.Lock())
+    server = BoundedThreadingHTTPServer(
         (settings.dashboard_host, settings.dashboard_port), handler
     )
     url = f"http://{settings.dashboard_host}:{settings.dashboard_port}"
@@ -122,4 +143,5 @@ def run_dashboard(settings) -> int:
         print("\n⏹️  Dashboard stopped.")
     finally:
         server.server_close()
+        store.close()
     return 0
