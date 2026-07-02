@@ -90,6 +90,27 @@ nem avatkozik be. Prioritás szerinti felépítés:
 
 ---
 
+## 3b. 🔒 Függőség-biztonság (CVE-audit, 2026-07-02)
+
+`pip-audit -r requirements.txt` átfutva: `aiohttp` (webhook-alert HTTP kliens) és
+`pynacl` (aláírás/kulcskezelés) ismert CVE-kkel bíró régi verzióban álltak,
+pedig a `driftpy` csomag ehhez a kettőhöz nyitott tartományt enged
+(`aiohttp<4.0.0`, `pynacl<2.0.0`) — ezért a `requirements.txt`-ben most
+explicit alsó korlát van rájuk (`aiohttp>=3.13.0`, `pynacl>=1.6.2`), teszt
+zöld velük.
+
+Négy másik transitiv csomagnak (`h11`, `idna`, `pycares`, `urllib3`) viszont a
+`driftpy==0.8.89` **pontosan (`==`) rögzített** verziót ír elő — ezeket **nem**
+emeltem feljebb: pip ugyan engedné (csak warningol), de a driftpy belső
+kódja lehet, hogy pont ahhoz a rögzített viselkedéshez van igazítva, és egy
+csendes runtime-eltérés (pl. az RPC/websocket rétegben) pont a "nagyobb
+crash" kategória, amit együtt kell átbeszélni, nem automatán felülírni. Ez
+upstream `driftpy`-blokkolt tétel — akkor oldható fel biztonságosan, ha a
+driftpy egy új release-ben emeli a saját pinjeit. Add. infó: `pip-audit`
+kimenete a session-logban.
+
+---
+
 ## 4. 🌐 Kiterjesztés az egész Solana hálózatra (architektúra-jegyzet)
 
 A kérdés: bővíthető-e a projekt az egész Solana hálózatra? Két értelemben:

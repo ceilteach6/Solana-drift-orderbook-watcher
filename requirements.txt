@@ -4,6 +4,12 @@ solana>=0.30.0
 solders>=0.18.0
 anchorpy>=0.20.0
 
+# Security floors for transitive deps with known CVEs (driftpy allows these
+# ranges; see docs/NOTES.md for the deps driftpy hard-pins that we can't
+# raise without an upstream release).
+aiohttp>=3.13.0
+pynacl>=1.6.2
+
 # Configuration
 python-dotenv>=1.0.0
 
