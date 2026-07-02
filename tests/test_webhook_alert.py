@@ -55,7 +55,7 @@ def test_both_configured_deliver_to_both():
     assert targets == ["telegram", "webhook"]
 
     urls = {t: u for t, _, u in requests}
-    assert "telegram.org" in urls["telegram"]
+    assert urls["telegram"] == "https://api.telegram.org/bottok/sendMessage"
     assert urls["webhook"] == "https://discord.example/hook"
 
 
