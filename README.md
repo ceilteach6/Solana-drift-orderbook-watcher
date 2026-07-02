@@ -120,6 +120,17 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Metrics (Prometheus)
+Set `METRICS_ENABLED=true` to serve a `/metrics` endpoint (stdlib HTTP
+server, no extra dependency) alongside the watcher — ticks, detections,
+snapshot/storage errors and the current risk score per market:
+```bash
+METRICS_ENABLED=true python main.py
+curl http://127.0.0.1:9090/metrics
+```
+Point a local Prometheus at `METRICS_HOST:METRICS_PORT` to scrape it; no
+external account or link required.
+
 ---
 
 ## 🔧 How the Drift integration works
@@ -183,7 +194,7 @@ Then register it in `watcher.py`. That's it.
 - [ ] Time-series storage (SQLite/Postgres) and replay
 - [ ] ML-based anomaly detection alongside the heuristics
 - [ ] Wallet-level reputation / blocklist (optional module)
-- [ ] Prometheus metrics (modeled on the Drift-style exporter)
+- [x] Prometheus metrics (`METRICS_ENABLED=true`, see above)
 
 ---
 

@@ -1,9 +1,17 @@
 # Secrets
+# NOTE: intentionally narrower than "*.env" — that pattern also swallows
+# tracked templates like config.example.env (and any future *.env.example),
+# silently `git add`-blocking them without -f. `.env*` still catches real
+# local secret files (.env, .env.local, .env.production, ...).
 .env
-*.env
+.env.*
 *keypair*.json
 *secret*
 *.pem
+
+# ...but never ignore checked-in example/template env files.
+!*.example.env
+!*.env.example
 
 # Python
 __pycache__/

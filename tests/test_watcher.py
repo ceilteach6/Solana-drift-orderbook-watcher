@@ -9,6 +9,7 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+from src.metrics import WatcherMetrics
 from src.watcher import Watcher, history_length
 
 
@@ -78,6 +79,7 @@ def test_tick_survives_a_broken_aggregator_or_alert_sink():
     watcher.alert = _BoomAlert()
     watcher.store = None
     watcher.settings = SimpleNamespace(persist_snapshots=False)
+    watcher.metrics = WatcherMetrics()
 
     # Must not raise.
     asyncio.run(watcher._tick("SOL-PERP"))
@@ -99,6 +101,7 @@ def test_healthcheck_survives_a_broken_alert_sink(monkeypatch):
     )
     watcher.alert = _BoomAlert()
     watcher._last_healthcheck = 0.0
+    watcher.metrics = WatcherMetrics()
 
     # Must not raise.
     watcher._maybe_healthcheck()
@@ -112,6 +115,7 @@ def test_persist_runs_the_blocking_store_write_off_the_event_loop():
     watcher.store = _RecordingStore()
     watcher.aggregator = None
     watcher.settings = SimpleNamespace(persist_snapshots=False)
+    watcher.metrics = WatcherMetrics()
 
     main_thread = threading.get_ident()
     assert asyncio.iscoroutinefunction(Watcher._persist)
