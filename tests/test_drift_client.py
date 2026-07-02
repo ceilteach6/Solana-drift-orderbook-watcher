@@ -18,6 +18,9 @@ class FakeSubscriber:
         self.fail = fail
         self.unsubscribed = False
 
+    async def subscribe(self):
+        pass
+
     async def unsubscribe(self):
         self.unsubscribed = True
         if self.fail:
@@ -94,3 +97,29 @@ def test_teardown_unwinds_partially_built_stack_on_failure():
 
 def test_teardown_handles_empty_built_dict():
     asyncio.run(DriftStack._teardown({}))  # must not raise
+
+
+def test_subscribe_and_register_records_object_before_subscribe_can_fail():
+    # Regression: build() used to do `await obj.subscribe(); built[key] = obj`,
+    # so an object whose subscribe() opens a websocket/listener but then
+    # raises (e.g. connects fine, fails on an initial account fetch) was
+    # never added to `built` — _teardown() had no reference to unsubscribe
+    # it and the half-subscribed listener leaked forever.
+    obj = FakeSubscriber(fail=False)
+
+    class FailingSubscribe(FakeSubscriber):
+        async def subscribe(self):
+            raise RuntimeError("boom")
+
+    failing = FailingSubscribe()
+    built: dict = {}
+
+    asyncio.run(DriftStack._subscribe_and_register(built, "ok", obj))
+    assert built["ok"] is obj
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(DriftStack._subscribe_and_register(built, "failing", failing))
+
+    # Registered before subscribe() raised, so a caller's except-block can
+    # still find and tear it down.
+    assert built["failing"] is failing

@@ -150,6 +150,23 @@ def test_flicker_needs_minimum_samples():
     assert det.analyze(s, []) == []
 
 
+def test_flicker_ignores_zero_size_ghost_levels():
+    # Regression: real L2 snapshots can carry explicit zero-size levels
+    # (a price with no resting liquidity, represented rather than omitted).
+    # Every other detector filters `size > 0` before matching levels; flicker
+    # didn't, so a level that only ever "toggles" between omitted and
+    # zero-size — never actually resting with real size — used to be
+    # reported as a spoofing-style order flicker.
+    det = FlickerDetector(make_settings(flicker_min_events=3, flicker_window_sec=10))
+    base = 4000.0
+    history = []
+    for i in range(6):
+        bids = [(99.0, 0.0)] if i % 2 == 0 else []  # never a real order
+        history.append(snap(bids=bids, asks=[(101.0, 1.0)], ts=base + i))
+    current = history.pop()
+    assert det.analyze(current, history) == []
+
+
 # --------------------------------------------------------------------------- #
 # Imbalance
 # --------------------------------------------------------------------------- #

@@ -61,6 +61,10 @@ def _make_handler(db_path: str):
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
+
+            if route in ("/", "/index.html"):
+                return self._send_html()
+
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
             try:
@@ -70,9 +74,6 @@ def _make_handler(db_path: str):
             if limit <= 0:
                 return self._send_json({"error": "limit must be positive"}, 400)
             limit = min(limit, _MAX_LIMIT)
-
-            if route in ("/", "/index.html"):
-                return self._send_html()
 
             # Each request opens its own short-lived read connection.
             store = SQLiteStore(db_path)

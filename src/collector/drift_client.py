@@ -80,23 +80,19 @@ class DriftStack:
                 settings.drift_env,
                 account_subscription=AccountSubscriptionConfig("websocket"),
             )
-            await drift_client.subscribe()
-            built["drift_client"] = drift_client
+            await cls._subscribe_and_register(built, "drift_client", drift_client)
 
             user_map = UserMap(UserMapConfig(drift_client, WebsocketConfig()))
-            await user_map.subscribe()
-            built["user_map"] = user_map
+            await cls._subscribe_and_register(built, "user_map", user_map)
 
             slot_subscriber = SlotSubscriber(drift_client)
-            await slot_subscriber.subscribe()
-            built["slot_subscriber"] = slot_subscriber
+            await cls._subscribe_and_register(built, "slot_subscriber", slot_subscriber)
 
             dlob_config = DLOBClientConfig(
                 drift_client, user_map, slot_subscriber, settings.update_frequency_ms
             )
             dlob_subscriber = DLOBSubscriber(config=dlob_config)
-            await dlob_subscriber.subscribe()
-            built["dlob_subscriber"] = dlob_subscriber
+            await cls._subscribe_and_register(built, "dlob_subscriber", dlob_subscriber)
         except Exception:
             await cls._teardown(built)
             raise
@@ -112,6 +108,19 @@ class DriftStack:
     def get_l2(self, market: str, depth: int = 20):
         """Return the current L2 orderbook for ``market`` (driftpy object)."""
         return self._dlob.get_l2_orderbook_sync(market, depth=depth)
+
+    @staticmethod
+    async def _subscribe_and_register(built: dict, key: str, obj) -> None:
+        """Register ``obj`` under ``key`` *before* awaiting its ``subscribe()``.
+
+        Some driftpy subscribe() implementations open a websocket / start a
+        background listener before doing further async work (e.g. an initial
+        account fetch) that can still fail. Registering only on success would
+        leave that half-subscribed object out of ``built``, so ``_teardown()``
+        could never unsubscribe it and its listener would leak forever.
+        """
+        built[key] = obj
+        await obj.subscribe()
 
     @staticmethod
     async def _teardown(built: dict) -> None:

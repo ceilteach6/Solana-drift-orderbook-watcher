@@ -44,9 +44,11 @@ class FlickerDetector(BaseDetector):
         for s in snaps:
             keys: set[tuple] = set()
             for lvl in s.bids:
-                keys.add(("bid", round(lvl.price, _PRICE_DECIMALS)))
+                if lvl.size > 0:
+                    keys.add(("bid", round(lvl.price, _PRICE_DECIMALS)))
             for lvl in s.asks:
-                keys.add(("ask", round(lvl.price, _PRICE_DECIMALS)))
+                if lvl.size > 0:
+                    keys.add(("ask", round(lvl.price, _PRICE_DECIMALS)))
             presence.append(keys)
             all_keys |= keys
 

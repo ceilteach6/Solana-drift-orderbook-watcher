@@ -60,3 +60,17 @@ def test_normal_limit_still_works(dashboard):
     status, body = _get(f"{dashboard}/api/series?market=SOL-PERP&limit=5")
     assert status == 200
     assert len(body["risk"]) <= 5
+
+
+def test_index_route_ignores_invalid_limit(dashboard):
+    # Regression: `limit` used to be parsed/validated before route dispatch,
+    # so `/?limit=<garbage>` on the index page (which never reads `limit`)
+    # returned a 400 JSON error instead of the dashboard HTML.
+    with urllib.request.urlopen(f"{dashboard}/?limit=not-a-number", timeout=5) as resp:
+        status = resp.status
+        content_type = resp.headers.get("Content-Type", "")
+    assert status == 200
+    assert "text/html" in content_type
+
+    with urllib.request.urlopen(f"{dashboard}/?limit=-1", timeout=5) as resp:
+        assert resp.status == 200
