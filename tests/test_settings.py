@@ -120,6 +120,28 @@ def test_allows_flicker_window_exactly_at_the_minimum():
     )  # 3 events * 1.0s interval == 3.0s window -> must not raise
 
 
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_rejects_non_positive_spoof_wall_ratio(bad_value):
+    # Regression: spoof_pull.py multiplies this against the median level
+    # size to pick a "wall" threshold; <= 0 makes every level (including
+    # dust) qualify, turning ordinary price movement into false-positive
+    # spoof alerts instead of the increased sensitivity a low value implies.
+    with pytest.raises(ValueError, match="SPOOF_WALL_RATIO"):
+        Settings(**base_kwargs(spoof_wall_ratio=bad_value))
+
+
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_rejects_non_positive_feed_max_consecutive_failures(bad_value):
+    with pytest.raises(ValueError, match="FEED_MAX_CONSECUTIVE_FAILURES"):
+        Settings(**base_kwargs(feed_max_consecutive_failures=bad_value))
+
+
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_rejects_non_positive_feed_stale_after_sec(bad_value):
+    with pytest.raises(ValueError, match="FEED_STALE_AFTER_SEC"):
+        Settings(**base_kwargs(feed_stale_after_sec=bad_value))
+
+
 def test_rejects_spoof_window_smaller_than_poll_interval():
     # Regression: spoof_pull.py only ever looks at prior snapshots inside
     # SPOOF_WINDOW_SEC. If that window is smaller than the poll interval, no

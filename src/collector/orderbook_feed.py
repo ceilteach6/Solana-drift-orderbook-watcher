@@ -130,8 +130,14 @@ class DriftOrderbookFeed(OrderbookFeed):
     async def close(self) -> None:
         if self._stack is not None:
             await self._stack.close()
-        # Don't block shutdown waiting on threads possibly still stuck in a
-        # blocking RPC call.
+        # wait=False so *this call* doesn't block waiting on a thread stuck
+        # in a blocking RPC call. That alone does not guarantee the process
+        # exits promptly, though: CPython's concurrent.futures.thread module
+        # registers a process-wide atexit hook that joins every
+        # ThreadPoolExecutor thread ever created, independent of any
+        # individual shutdown() call's arguments. main.py accounts for that
+        # by calling os._exit() after cleanup instead of relying on normal
+        # interpreter shutdown.
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 

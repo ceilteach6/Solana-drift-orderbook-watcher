@@ -59,6 +59,7 @@ if __name__ == "__main__":
 
         sys.exit(run_dashboard(settings))
 
+    exit_code = 0
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
@@ -70,4 +71,20 @@ if __name__ == "__main__":
         # Exit non-zero so a process supervisor (systemd Restart=on-failure,
         # Docker restart policy, k8s liveness probe) sees this as a crash and
         # restarts the watcher instead of treating it as a clean shutdown.
-        sys.exit(1)
+        exit_code = 1
+
+    # asyncio.run(main()) has already returned, which means Watcher.start()'s
+    # finally block ran feed.close()/store.close() to completion. Exit here
+    # via os._exit() rather than falling off the end of __main__ (which would
+    # trigger normal interpreter shutdown): CPython's concurrent.futures.thread
+    # module registers a process-wide atexit hook that joins EVERY worker
+    # thread any ThreadPoolExecutor in this process ever created, regardless
+    # of that executor's own shutdown(wait=...) argument. If a poll tick's RPC
+    # call was genuinely stuck (no socket-level timeout in the underlying
+    # client), that hook would hang the whole process on exit even though
+    # DriftOrderbookFeed.close() explicitly asked not to wait. We've already
+    # done our own cleanup above, so skip the rest of Python's shutdown
+    # machinery instead of relying on it.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)

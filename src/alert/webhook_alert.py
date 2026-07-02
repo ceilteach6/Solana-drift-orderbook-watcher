@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,6 +30,15 @@ logger = logging.getLogger(__name__)
 # firing across many markets in one tick) can't spawn unbounded threads —
 # excess deliveries queue instead of piling up as raw OS threads.
 _DELIVERY_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="webhook-alert")
+
+# A spoofing event is exactly the moment many detections fire close together,
+# which is also when transient delivery failures (rate limits, brief network
+# blips) are most likely — the highest-value alerts are the ones most at risk
+# of a one-shot send silently dropping them. Retry a bounded number of times
+# on failures that are plausibly transient before giving up on that alert.
+_MAX_SEND_ATTEMPTS = 3
+_RETRY_BASE_DELAY_SEC = 0.5
+_RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 
 
 class WebhookAlert(Alert):
@@ -49,14 +60,28 @@ class WebhookAlert(Alert):
 
     def _send(self, target: str, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_SEND_ATTEMPTS + 1):
+            req = urllib.request.Request(url, data=data, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+                    resp.read()
+                return
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code not in _RETRYABLE_HTTP_CODES:
+                    break  # e.g. 400/401/404 — a retry would fail identically
+            except Exception as exc:
+                last_exc = exc  # timeout, connection reset, DNS blip, etc.
+            if attempt < _MAX_SEND_ATTEMPTS:
+                # Runs on the bounded delivery pool thread, not the event
+                # loop, so a blocking sleep here can't stall polling/detection.
+                time.sleep(_RETRY_BASE_DELAY_SEC * attempt)
+        logger.warning(
+            "Webhook delivery failed (%s) after %d attempt(s): %s",
+            target, _MAX_SEND_ATTEMPTS, last_exc,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
-                resp.read()
-        except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", target, exc)
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:

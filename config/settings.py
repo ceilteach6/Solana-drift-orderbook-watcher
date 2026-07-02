@@ -110,6 +110,16 @@ class Settings:
     healthcheck_enabled: bool = False
     healthcheck_interval_sec: float = 300.0
 
+    # --- Feed liveness / reconnect ---
+    # After this many consecutive failed snapshot polls, the watcher tears
+    # down and rebuilds the live Drift connection instead of polling a
+    # connection that's never coming back on its own.
+    feed_max_consecutive_failures: int = 5
+    # Health-check alerts if no snapshot has succeeded in this many seconds —
+    # independent of healthcheck_interval_sec so it can be tuned without
+    # changing how often the self-test itself runs.
+    feed_stale_after_sec: float = 120.0
+
     # --- Storage (time-series persistence) ---
     storage_enabled: bool = False
     db_path: str = "data/watcher.db"
@@ -157,6 +167,24 @@ class Settings:
             raise ValueError(
                 f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move}); "
                 "it is used as a divisor in spoof_pull's scoring"
+            )
+        if self.spoof_wall_ratio <= 0:
+            raise ValueError(
+                f"SPOOF_WALL_RATIO must be > 0 (got {self.spoof_wall_ratio}); "
+                "spoof_pull multiplies it against the median level size to pick "
+                "a wall threshold — a value <= 0 makes every level (including "
+                "dust) qualify as a 'wall', turning ordinary price movement "
+                "into a stream of false-positive spoof alerts instead of the "
+                "increased sensitivity a lower value is meant to give"
+            )
+        if self.feed_max_consecutive_failures < 1:
+            raise ValueError(
+                f"FEED_MAX_CONSECUTIVE_FAILURES must be >= 1 "
+                f"(got {self.feed_max_consecutive_failures})"
+            )
+        if self.feed_stale_after_sec <= 0:
+            raise ValueError(
+                f"FEED_STALE_AFTER_SEC must be > 0 (got {self.feed_stale_after_sec})"
             )
         if self.update_frequency_ms < 1:
             raise ValueError(
@@ -235,6 +263,8 @@ def load_settings() -> Settings:
         healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
+        feed_max_consecutive_failures=_get_int("FEED_MAX_CONSECUTIVE_FAILURES", 5),
+        feed_stale_after_sec=_get_float("FEED_STALE_AFTER_SEC", 120.0),
         storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         db_path=_get_str("DB_PATH", "data/watcher.db"),
