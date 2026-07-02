@@ -20,6 +20,13 @@ How:
    - stay quiet (no re-spam) until ``RISK_ALERT_COOLDOWN_SEC`` elapses
    - clear the elevated state only when it drops below ``RISK_CLEAR_THRESHOLD``
      (lower than the alert threshold → no flapping at the boundary)
+
+``AlertDispatcher`` applies a further, independently configured
+``ALERT_MIN_SCORE`` filter to whatever this returns. The hysteresis state
+(elevated/cleared) always tracks ``RISK_ALERT_THRESHOLD``/``RISK_CLEAR_THRESHOLD``,
+but the cooldown clock only starts/refreshes on a crossing that also clears
+``ALERT_MIN_SCORE`` — otherwise an alert the operator never actually receives
+would still gate the next, genuinely deliverable one.
 """
 
 from __future__ import annotations
@@ -46,9 +53,22 @@ class RiskAggregator:
         smoothed = alpha * instant + (1 - alpha) * prev
         self._score[market] = smoothed
 
+        # ALERT_MIN_SCORE is a second, independently configured gate that
+        # AlertDispatcher.emit() applies to whatever we return here. A score
+        # that clears RISK_ALERT_THRESHOLD but not ALERT_MIN_SCORE would
+        # never reach the operator — but stamping `_last_emit`/cooldown for
+        # it anyway (as if it *had* been delivered) would silently withhold
+        # the next, genuinely deliverable spike until the cooldown elapses
+        # from an event the operator never saw. Only treat a crossing as
+        # "emitted" (and start/refresh the cooldown clock) once it would
+        # actually pass the dispatcher's filter too.
+        deliverable = smoothed >= self.settings.alert_min_score
+
         if self._alerting.get(market, False):
             if smoothed < self.settings.risk_clear_threshold:
                 self._alerting[market] = False  # cleared; go quiet
+                return None
+            if not deliverable:
                 return None
             # Still elevated — re-emit only after the cooldown.
             last = self._last_emit.get(market, float("-inf"))
@@ -57,7 +77,9 @@ class RiskAggregator:
             return None
 
         if smoothed >= self.settings.risk_alert_threshold:
-            self._alerting[market] = True
+            self._alerting[market] = True  # hysteresis state, regardless of deliverability
+            if not deliverable:
+                return None
             return self._build(market, smoothed, by_detector, timestamp)
         return None
 

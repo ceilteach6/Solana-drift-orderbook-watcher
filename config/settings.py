@@ -169,6 +169,32 @@ class Settings:
                 "it is an EMA alpha and a value outside this range lets the smoothed "
                 "risk score escape [0, 1], breaking the alert/clear hysteresis"
             )
+        # Both flicker and spoof-pull only ever look at *prior* snapshots that
+        # fall within their own window (see src/detector/flicker.py and
+        # spoof_pull.py); which prior snapshots exist is entirely a function
+        # of the poll interval. If the window is too small relative to
+        # UPDATE_FREQUENCY_MS, not enough snapshots (or not enough
+        # transitions) can ever land inside it, and the detector silently
+        # never fires again — no error, indistinguishable from "market is
+        # quiet". This is invisible at review time since the three settings
+        # live in unrelated sections of the config.
+        interval_sec = self.update_frequency_ms / 1000.0
+        min_flicker_window = self.flicker_min_events * interval_sec
+        if self.flicker_window_sec < min_flicker_window:
+            raise ValueError(
+                f"FLICKER_WINDOW_SEC ({self.flicker_window_sec}s) is too small for "
+                f"FLICKER_MIN_EVENTS={self.flicker_min_events} at UPDATE_FREQUENCY_MS="
+                f"{self.update_frequency_ms} ({interval_sec:.3f}s/poll); needs >= "
+                f"{min_flicker_window:.3f}s, or fewer than {self.flicker_min_events} "
+                "transitions can ever land inside the window and flicker can never fire"
+            )
+        if self.spoof_window_sec < interval_sec:
+            raise ValueError(
+                f"SPOOF_WINDOW_SEC ({self.spoof_window_sec}s) is smaller than the poll "
+                f"interval (UPDATE_FREQUENCY_MS={self.update_frequency_ms} -> "
+                f"{interval_sec:.3f}s); no prior snapshot can ever fall inside the "
+                "window and spoof-pull can never fire"
+            )
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,

@@ -95,3 +95,40 @@ def test_rejects_risk_smoothing_outside_unit_interval(bad_value):
 def test_allows_risk_smoothing_at_unit_interval_bounds():
     Settings(**base_kwargs(risk_smoothing=0.0))  # must not raise
     Settings(**base_kwargs(risk_smoothing=1.0))  # must not raise
+
+
+def test_rejects_flicker_window_too_small_for_min_events_at_poll_interval():
+    # Regression: flicker.py counts transitions only between snapshots that
+    # fall inside FLICKER_WINDOW_SEC. Slowing the poll interval (a very
+    # ordinary tuning step, e.g. to cut RPC load) without widening the
+    # window shrinks how many snapshots ever land in that window — below
+    # FLICKER_MIN_EVENTS, the detector can mathematically never fire again,
+    # with no error.
+    with pytest.raises(ValueError, match="FLICKER_WINDOW_SEC"):
+        Settings(
+            **base_kwargs(
+                update_frequency_ms=3000, flicker_window_sec=5.0, flicker_min_events=3
+            )
+        )
+
+
+def test_allows_flicker_window_exactly_at_the_minimum():
+    Settings(
+        **base_kwargs(
+            update_frequency_ms=1000, flicker_window_sec=3.0, flicker_min_events=3
+        )
+    )  # 3 events * 1.0s interval == 3.0s window -> must not raise
+
+
+def test_rejects_spoof_window_smaller_than_poll_interval():
+    # Regression: spoof_pull.py only ever looks at prior snapshots inside
+    # SPOOF_WINDOW_SEC. If that window is smaller than the poll interval, no
+    # prior snapshot can ever fall inside it and the detector can never fire.
+    with pytest.raises(ValueError, match="SPOOF_WINDOW_SEC"):
+        Settings(
+            **base_kwargs(
+                update_frequency_ms=5000,
+                spoof_window_sec=2.0,
+                flicker_window_sec=20.0,  # wide enough to clear the flicker check first
+            )
+        )
