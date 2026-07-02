@@ -32,7 +32,7 @@ def det(detector="imbalance", score=0.9, market="SOL-PERP"):
 
 def test_schema_and_counts_start_empty(tmp_path):
     store = make_store(tmp_path)
-    assert store.counts() == {"snapshots": 0, "detections": 0, "risk": 0}
+    assert store.counts() == {"snapshots": 0, "detections": 0, "risk": 0, "prices": 0}
     store.close()
 
 
@@ -69,11 +69,22 @@ def test_record_risk(tmp_path):
     store.close()
 
 
+def test_record_price(tmp_path):
+    store = make_store(tmp_path)
+    store.record_price("SOL-PERP", 1.0, 150.0)
+    store.record_price("SOL-PERP", 2.0, 150.5)
+    assert store.counts()["prices"] == 2
+    store.close()
+
+
 def test_series_and_markets_readback(tmp_path):
     store = make_store(tmp_path)
-    store.record_risk("SOL-PERP", 1.2, 0.5, 150.0)
-    store.record_risk("SOL-PERP", 1.8, 0.7, 151.0)  # same second -> averaged
-    store.record_risk("SOL-PERP", 2.4, 0.6, 152.0)
+    store.record_price("SOL-PERP", 1.2, 150.0)
+    store.record_price("SOL-PERP", 1.8, 151.0)  # same second -> averaged
+    store.record_price("SOL-PERP", 2.4, 152.0)
+    store.record_risk("SOL-PERP", 1.2, 0.5)
+    store.record_risk("SOL-PERP", 1.8, 0.7)
+    store.record_risk("SOL-PERP", 2.4, 0.6)
     store.record_detections(1.0, [det("flicker", 0.8)])
 
     assert store.markets() == ["SOL-PERP"]
@@ -88,6 +99,38 @@ def test_series_and_markets_readback(tmp_path):
     markers = store.detection_markers("SOL-PERP")
     assert markers[0]["detector"] == "flicker"
     assert markers[0]["time"] == 1
+    store.close()
+
+
+def test_price_series_populated_without_risk_aggregation(tmp_path):
+    # Regression: price_series() used to read from the `risk` table, so it
+    # stayed empty forever whenever RISK_AGGREGATION=false (risk is never
+    # recorded in that mode) even though prices were flowing. record_tick()
+    # now writes price unconditionally into its own table.
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(ts=1.0), [], risk=None)
+    store.record_tick("SOL-PERP", snap(ts=2.0), [], risk=None)
+
+    assert store.counts()["risk"] == 0
+    price = store.price_series("SOL-PERP")
+    assert [p["time"] for p in price] == [1, 2]
+    assert store.risk_series("SOL-PERP") == []
+    store.close()
+
+
+def test_spread_recorded_when_price_is_zero(tmp_path):
+    # Regression: `best_bid and best_ask` treated a legitimate 0.0 price as
+    # missing and dropped the spread; must use `is not None`.
+    store = make_store(tmp_path)
+    zero_snap = OrderbookSnapshot(
+        market="SOL-PERP",
+        timestamp=1.0,
+        bids=[Level(0.0, 5.0)],
+        asks=[Level(0.0, 4.0)],
+    )
+    store.record_snapshot(zero_snap)
+    row = store._conn.execute("SELECT spread FROM snapshots").fetchone()
+    assert row["spread"] == 0.0
     store.close()
 
 
@@ -113,10 +156,10 @@ def test_persistence_across_reopen(tmp_path):
     reopened.close()
 
 
-def test_record_tick_writes_detections_and_risk_in_one_transaction(tmp_path):
+def test_record_tick_writes_detections_price_and_risk_in_one_transaction(tmp_path):
     store = make_store(tmp_path)
     store.record_tick("SOL-PERP", snap(), [det("imbalance", 0.9)], risk=0.5)
-    assert store.counts() == {"snapshots": 0, "detections": 1, "risk": 1}
+    assert store.counts() == {"snapshots": 0, "detections": 1, "risk": 1, "prices": 1}
     store.close()
 
 
