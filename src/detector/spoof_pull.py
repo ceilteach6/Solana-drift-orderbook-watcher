@@ -73,9 +73,14 @@ class SpoofPullDetector(BaseDetector):
                     continue  # wall is still (mostly) there — not pulled
 
                 pulled_fraction = 1.0 - (now_size / wall_size if wall_size else 0.0)
-                move_factor = min(
-                    1.0, abs(price_move) / (2 * self.settings.spoof_min_price_move)
-                )
+                # Settings validates SPOOF_MIN_PRICE_MOVE > 0, but this
+                # detector only assumes a duck-typed settings object (tests
+                # and third-party embedders pass a plain SimpleNamespace) —
+                # guard the division itself so a misconfigured or
+                # hand-built settings object can't turn every wall-pull tick
+                # into a ZeroDivisionError.
+                min_move = max(self.settings.spoof_min_price_move, 1e-12)
+                move_factor = min(1.0, abs(price_move) / (2 * min_move))
                 score = min(1.0, 0.4 + 0.6 * max(pulled_fraction, move_factor))
 
                 candidate = (score, price_key, wall_size, now_size, price_move)

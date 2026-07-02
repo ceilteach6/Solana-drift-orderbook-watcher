@@ -262,6 +262,26 @@ def test_spoof_pull_quiet_without_price_move():
     assert det.analyze(current, [prior]) == []
 
 
+def test_spoof_pull_does_not_crash_on_zero_min_price_move():
+    """Regression: scoring a detected wall-pull divided by
+    2 * spoof_min_price_move with no guard, so spoof_min_price_move=0 raised
+    ZeroDivisionError on every pulled wall. Settings now rejects 0 at load
+    time, but the detector accepts any duck-typed settings object (this test
+    uses the same SimpleNamespace-based settings the rest of this file does,
+    which is never routed through Settings.__post_init__), so the division
+    itself must be safe too."""
+    det = SpoofPullDetector(make_settings(spoof_min_price_move=0))
+    prior = _prior_with_bid_wall(ts=0.0)
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0), (100.0, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    detections = det.analyze(current, [prior])  # must not raise
+    assert len(detections) == 1
+    assert detections[0].score > 0
+
+
 def test_spoof_pull_quiet_without_wall():
     det = SpoofPullDetector(make_settings())
     # No oversized wall in prior; price moves anyway.

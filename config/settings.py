@@ -132,13 +132,76 @@ class Settings:
     run_duration_sec: float = 0.0
 
     def __post_init__(self) -> None:
+        # Every check below fails fast at startup instead of a bad `.env`
+        # value surfacing later as a crash or silent misbehavior deep in the
+        # run loop — e.g. SPOOF_MIN_PRICE_MOVE=0 previously reached a
+        # ZeroDivisionError only on the first *detected* wall-pull (easy to
+        # miss in testing), RISK_SMOOTHING=0 silently froze the smoothed risk
+        # score at 0 forever with no error at all, and UPDATE_FREQUENCY_MS=0
+        # turned the poll loop into a tight busy-loop instead of failing here.
+        errors: list[str] = []
+
+        def positive(name: str, value) -> None:
+            if not value > 0:
+                errors.append(f"{name} must be > 0 (got {value})")
+
+        def non_negative(name: str, value) -> None:
+            if value < 0:
+                errors.append(f"{name} must be >= 0 (got {value})")
+
+        def in_unit_interval(name: str, value, *, zero_allowed: bool) -> None:
+            if value < 0 or value > 1 or (not zero_allowed and value == 0):
+                bound = ">= 0 and <= 1" if zero_allowed else "> 0 and <= 1"
+                errors.append(f"{name} must be {bound} (got {value})")
+
+        positive("ORDERBOOK_DEPTH", self.orderbook_depth)
+        positive("UPDATE_FREQUENCY_MS", self.update_frequency_ms)
+        positive("SNAPSHOT_TIMEOUT_SEC", self.snapshot_timeout_sec)
+        positive("REPEATED_MIN_COUNT", self.repeated_min_count)
+        positive("LAYERING_MIN_LEVELS", self.layering_min_levels)
+        positive("FLICKER_WINDOW_SEC", self.flicker_window_sec)
+        positive("FLICKER_MIN_EVENTS", self.flicker_min_events)
+        positive("IMBALANCE_MIN_LEVELS", self.imbalance_min_levels)
+        positive("SPOOF_WINDOW_SEC", self.spoof_window_sec)
+        positive("SPOOF_WALL_RATIO", self.spoof_wall_ratio)
+        # spoof_pull.py divides by 2 * SPOOF_MIN_PRICE_MOVE when scoring a
+        # detected wall-pull — zero (or negative) guarantees a
+        # ZeroDivisionError the first time that code path fires.
+        positive("SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move)
+        positive("HEALTHCHECK_INTERVAL_SEC", self.healthcheck_interval_sec)
+
+        non_negative("REPEATED_SIZE_TOLERANCE", self.repeated_size_tolerance)
+        non_negative("IMBALANCE_MIN_TOTAL_VOLUME", self.imbalance_min_total_volume)
+        non_negative("RISK_ALERT_COOLDOWN_SEC", self.risk_alert_cooldown_sec)
+        non_negative("RUN_DURATION_SEC", self.run_duration_sec)
+
+        in_unit_interval("IMBALANCE_MIN_RATIO", self.imbalance_min_ratio, zero_allowed=True)
+        in_unit_interval("SPOOF_PULL_FRACTION", self.spoof_pull_fraction, zero_allowed=True)
+        in_unit_interval("RISK_ALERT_THRESHOLD", self.risk_alert_threshold, zero_allowed=True)
+        in_unit_interval("RISK_CLEAR_THRESHOLD", self.risk_clear_threshold, zero_allowed=True)
+        in_unit_interval("ALERT_MIN_SCORE", self.alert_min_score, zero_allowed=True)
+        # RISK_SMOOTHING is the EMA alpha in `smoothed = alpha*instant +
+        # (1-alpha)*prev`. alpha=0 makes `smoothed` permanently equal to its
+        # initial value (0), so the risk-aggregated alert path can never fire
+        # again — a silent, total loss of risk alerting.
+        in_unit_interval("RISK_SMOOTHING", self.risk_smoothing, zero_allowed=False)
+
+        if self.alert_format not in ("console", "json"):
+            errors.append(f"ALERT_FORMAT must be 'console' or 'json' (got {self.alert_format!r})")
+        if not (1 <= self.dashboard_port <= 65535):
+            errors.append(f"DASHBOARD_PORT must be in 1..65535 (got {self.dashboard_port})")
+
         # Hysteresis in RiskAggregator requires clear < alert, or the
         # "alerting" state never clears and cooldown becomes the only gate.
         if self.risk_clear_threshold >= self.risk_alert_threshold:
-            raise ValueError(
+            errors.append(
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,

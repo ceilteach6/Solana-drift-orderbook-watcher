@@ -158,6 +158,18 @@ def _snapshot_from_driftpy(market: str, l2) -> OrderbookSnapshot:
             size = getattr(lvl, "size", None)
             if price is None and isinstance(lvl, dict):
                 price, size = lvl.get("price"), lvl.get("size")
+            if price is None or size is None:
+                # _to_raw() would silently turn a missing field into 0.0,
+                # producing a fake zero-price/zero-size level. A zero-price
+                # ask sorts to the front of the (ascending) ask side below,
+                # becoming the new "best ask" and corrupting mid price,
+                # spread, and every detector/storage row derived from it —
+                # drop the level instead and keep the rest of the snapshot.
+                logger.warning(
+                    "%s: dropping malformed L2 level (price=%r, size=%r)",
+                    market, price, size,
+                )
+                continue
             out.append(Level(
                 _to_raw(price) / PRICE_PRECISION,
                 _to_raw(size) / BASE_PRECISION,

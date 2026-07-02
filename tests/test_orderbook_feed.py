@@ -70,6 +70,24 @@ def test_snapshot_from_driftpy_handles_dict_levels():
     assert snap.bids[0].size == 5.0
 
 
+def test_snapshot_from_driftpy_drops_malformed_levels_instead_of_zeroing_them():
+    # A level missing price/size used to fall through to _to_raw()'s
+    # fallback and become a fake Level(0.0, 0.0). A zero-price ask then sorts
+    # to the *front* of the (ascending) ask side, becoming the new "best
+    # ask" and corrupting mid price, spread, and every detector/storage row
+    # derived from it. It must be dropped instead.
+    l2 = SimpleNamespace(
+        bids=[_lvl(100 * PRICE_PRECISION, 1 * BASE_PRECISION)],
+        asks=[SimpleNamespace(price=None, size=None),
+              _lvl(101 * PRICE_PRECISION, 1 * BASE_PRECISION)],
+    )
+    snap = _snapshot_from_driftpy("SOL-PERP", l2)
+
+    assert len(snap.asks) == 1
+    assert snap.asks[0].price == 101.0
+    assert snap.mid == 100.5
+
+
 class _FakeStack:
     def get_l2(self, market, depth):
         return SimpleNamespace(bids=[], asks=[], thread=threading.get_ident())
