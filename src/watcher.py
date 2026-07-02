@@ -80,6 +80,12 @@ class Watcher:
         try:
             await self._run_loop()
         finally:
+            # Drain queued/in-flight alert deliveries (e.g. webhook) before
+            # anything else: main.py exits via os._exit() after this
+            # returns, which skips normal interpreter shutdown entirely, so
+            # a detection alerted on this run's last tick would otherwise be
+            # silently discarded instead of just delayed.
+            self.alert.close()
             await self.feed.close()
             if self.store is not None:
                 self.store.close()

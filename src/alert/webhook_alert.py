@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 
 from src.alert.base import Alert
 
@@ -30,6 +31,51 @@ logger = logging.getLogger(__name__)
 # firing across many markets in one tick) can't spawn unbounded threads —
 # excess deliveries queue instead of piling up as raw OS threads.
 _DELIVERY_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="webhook-alert")
+
+# deliver() is fire-and-forget: it submits to _DELIVERY_POOL and returns
+# immediately, without waiting for the HTTP call. main.py exits via
+# os._exit() (see its module docstring) specifically to dodge
+# concurrent.futures.thread's atexit hook that would otherwise join every
+# executor thread ever created — but os._exit() skips *all* interpreter
+# shutdown machinery, including any alert still queued or mid-retry-sleep on
+# this pool. Without tracking outstanding futures and giving them a bounded
+# chance to finish before that exit, an alert fired on the process's last
+# tick (a shutdown-triggering error, a Ctrl+C, or RUN_DURATION_SEC ending)
+# would be silently discarded with no log line. See drain().
+_pending_lock = threading.Lock()
+_pending_futures: set = set()
+
+
+def _track(future) -> None:
+    with _pending_lock:
+        _pending_futures.add(future)
+    future.add_done_callback(_untrack)
+
+
+def _untrack(future) -> None:
+    with _pending_lock:
+        _pending_futures.discard(future)
+
+
+def drain(timeout: float = 5.0) -> None:
+    """Give queued/in-flight webhook deliveries a bounded chance to finish.
+
+    Call this during shutdown, before anything that skips normal interpreter
+    cleanup (e.g. ``os._exit()``). Bounded rather than an unconditional
+    ``_DELIVERY_POOL.shutdown(wait=True)``: a delivery genuinely stuck past
+    its own socket timeout must not turn a fast shutdown back into the kind
+    of hang ``os._exit()`` was introduced to avoid.
+    """
+    with _pending_lock:
+        futures = list(_pending_futures)
+    if not futures:
+        return
+    _, not_done = wait_futures(futures, timeout=timeout)
+    if not_done:
+        logger.warning(
+            "Shutdown: %d webhook delivery(ies) still in flight after %.0fs — dropped",
+            len(not_done), timeout,
+        )
 
 # A spoofing event is exactly the moment many detections fire close together,
 # which is also when transient delivery failures (rate limits, brief network
@@ -56,7 +102,10 @@ class WebhookAlert(Alert):
     def deliver(self, detection) -> None:
         """Queue HTTP delivery on a bounded pool to avoid blocking the event loop."""
         for target, payload, url in self._build_requests(detection):
-            _DELIVERY_POOL.submit(self._send, target, payload, url)
+            _track(_DELIVERY_POOL.submit(self._send, target, payload, url))
+
+    def close(self, timeout: float = 5.0) -> None:
+        drain(timeout=timeout)
 
     def _send(self, target: str, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")

@@ -27,6 +27,16 @@ class Alert:
         """Deliver one (already score-filtered) detection."""
         raise NotImplementedError
 
+    def close(self, timeout: float = 5.0) -> None:
+        """Best-effort flush of any asynchronous delivery this sink queued.
+
+        Default no-op: most sinks (e.g. console) deliver synchronously and
+        have nothing to drain. Sinks that queue work on a background thread
+        (webhook) must override this so a shutdown right after the last
+        detection doesn't silently discard it — see WebhookAlert.close().
+        """
+        return None
+
 
 class AlertDispatcher:
     """Filters detections by score and delivers them to all sinks."""
@@ -48,3 +58,16 @@ class AlertDispatcher:
                     logger.exception("Alert sink %s failed", sink.name)
             emitted += 1
         return emitted
+
+    def close(self, timeout: float = 5.0) -> None:
+        """Give every sink a bounded chance to flush queued deliveries.
+
+        Called during shutdown (see Watcher.start()'s finally), before
+        main.py's os._exit() — which skips normal interpreter cleanup, so
+        anything not drained here is lost, not merely delayed.
+        """
+        for sink in self.sinks:
+            try:
+                sink.close(timeout=timeout)
+            except Exception:
+                logger.exception("Alert sink %s failed to close cleanly", sink.name)

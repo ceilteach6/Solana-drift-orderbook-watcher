@@ -6,6 +6,8 @@ channels. A user who configures both must get delivery to both, not have one
 silently shadow the other.
 """
 
+import threading
+import time
 import urllib.error
 from types import SimpleNamespace
 
@@ -131,3 +133,54 @@ def test_send_gives_up_after_max_attempts_on_persistent_failures(monkeypatch):
     alert._send("webhook", {"content": "hi"}, "https://example.invalid/hook")  # must not raise
 
     assert len(calls) == webhook_alert_module._MAX_SEND_ATTEMPTS
+
+
+def test_close_waits_for_a_delivery_queued_moments_before_shutdown(monkeypatch):
+    # Regression: deliver() is fire-and-forget (submits to a background pool
+    # and returns immediately). main.py exits via os._exit(), which skips
+    # normal interpreter shutdown entirely — so a detection alerted on the
+    # last tick before shutdown was silently dropped unless something waits
+    # for the pool. close()/drain() must block until the queued send
+    # actually runs, not just until submit() returns.
+    sent = threading.Event()
+
+    def fake_urlopen(req, timeout=5):
+        time.sleep(0.05)  # simulate real network latency
+        sent.set()
+        return _FakeResponse()
+
+    monkeypatch.setattr(webhook_alert_module.urllib.request, "urlopen", fake_urlopen)
+
+    alert = WebhookAlert(_settings(alert_webhook_url="https://example.invalid/hook"))
+    alert.deliver(_detection())
+
+    assert not sent.is_set()  # deliver() must not itself have blocked
+    alert.close(timeout=5.0)
+    assert sent.is_set()
+
+
+def test_close_gives_up_after_timeout_and_reports_still_in_flight(monkeypatch, caplog):
+    # A delivery genuinely stuck past its own socket timeout must not turn a
+    # bounded drain back into an unbounded hang.
+    release = threading.Event()
+
+    def fake_urlopen(req, timeout=5):
+        release.wait(2.0)
+        return _FakeResponse()
+
+    monkeypatch.setattr(webhook_alert_module.urllib.request, "urlopen", fake_urlopen)
+
+    alert = WebhookAlert(_settings(alert_webhook_url="https://example.invalid/hook"))
+    alert.deliver(_detection())
+
+    with caplog.at_level("WARNING", logger=webhook_alert_module.logger.name):
+        alert.close(timeout=0.05)
+    assert "still in flight" in caplog.text
+
+    release.set()  # let the background send finish so it doesn't leak past the test
+
+
+def test_drain_is_a_noop_when_nothing_is_pending():
+    # Must not block or raise when no webhook sink was ever used (the
+    # common case: console-only alerting).
+    webhook_alert_module.drain(timeout=1.0)
