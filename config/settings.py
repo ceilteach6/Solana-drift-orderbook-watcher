@@ -119,6 +119,11 @@ class Settings:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8787
 
+    # --- Metrics (Prometheus exporter) ---
+    metrics_enabled: bool = False
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 9090
+
     # --- Alerting ---
     alert_min_score: float = 0.6
     alert_format: str = "console"
@@ -139,6 +144,24 @@ class Settings:
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+        # Each of these thresholds is used as a divisor when a detector scores
+        # its finding (e.g. `count / (min_count * 2)`). A zero or negative
+        # value doesn't just misconfigure a detector's sensitivity — it makes
+        # analyze() raise ZeroDivisionError on every tick that would otherwise
+        # have flagged something, which (via the per-detector try/except in
+        # Watcher._tick) silently and permanently disables that detector
+        # instead of failing to start with a clear message. Reject it here,
+        # at the one place every deployment path (main.py, --selftest, the
+        # health-check) constructs Settings from.
+        for field_name, env_name in (
+            ("repeated_min_count", "REPEATED_MIN_COUNT"),
+            ("layering_min_levels", "LAYERING_MIN_LEVELS"),
+            ("flicker_min_events", "FLICKER_MIN_EVENTS"),
+            ("spoof_min_price_move", "SPOOF_MIN_PRICE_MOVE"),
+        ):
+            value = getattr(self, field_name)
+            if value <= 0:
+                raise ValueError(f"{env_name} must be > 0 (got {value})")
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,
@@ -186,6 +209,10 @@ def load_settings() -> Settings:
         in ("1", "true", "yes", "on"),
         dashboard_host=_get_str("DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=_get_int("DASHBOARD_PORT", 8787),
+        metrics_enabled=_get_str("METRICS_ENABLED", "false").lower()
+        in ("1", "true", "yes", "on"),
+        metrics_host=_get_str("METRICS_HOST", "127.0.0.1"),
+        metrics_port=_get_int("METRICS_PORT", 9090),
         alert_min_score=_get_float("ALERT_MIN_SCORE", 0.6),
         alert_format=_get_str("ALERT_FORMAT", "console").lower(),
         alert_webhook_url=_get_str("ALERT_WEBHOOK_URL", ""),

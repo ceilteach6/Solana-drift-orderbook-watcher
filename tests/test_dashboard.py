@@ -60,3 +60,15 @@ def test_normal_limit_still_works(dashboard):
     status, body = _get(f"{dashboard}/api/series?market=SOL-PERP&limit=5")
     assert status == 200
     assert len(body["risk"]) <= 5
+
+
+def test_index_page_ignores_a_malformed_limit_query_param(dashboard):
+    # Regression: `limit` was parsed/validated before the route was checked,
+    # so a stray `?limit=-1` (or non-integer) on `/` returned the API's 400
+    # instead of serving the page, even though the page never reads `limit`.
+    with urllib.request.urlopen(f"{dashboard}/?limit=-1", timeout=5) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("text/html")
+
+    with urllib.request.urlopen(f"{dashboard}/?limit=not-a-number", timeout=5) as resp:
+        assert resp.status == 200

@@ -19,6 +19,7 @@ from src.alert import AlertDispatcher, build_alert_sinks
 from src.collector.orderbook_feed import create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
+from src.metrics import MetricsRegistry, start_metrics_server
 from src.risk import RiskAggregator
 from src.selftest import run_selftest
 from src.storage import SQLiteStore
@@ -46,6 +47,8 @@ class Watcher:
         self.alert = AlertDispatcher(settings, build_alert_sinks(settings))
         self.aggregator = RiskAggregator(settings) if settings.risk_aggregation else None
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
+        self.metrics = MetricsRegistry()
+        self._metrics_server = None
         self.feed = None
         self._last_healthcheck: float = 0.0
 
@@ -68,6 +71,10 @@ class Watcher:
         self._banner()
         if self.store is not None:
             self.store.connect()
+        if self.settings.metrics_enabled:
+            self._metrics_server = start_metrics_server(
+                self.metrics, self.settings.metrics_host, self.settings.metrics_port
+            )
         self.feed = await create_feed(self.settings)
         try:
             await self._run_loop()
@@ -75,6 +82,9 @@ class Watcher:
             await self.feed.close()
             if self.store is not None:
                 self.store.close()
+            if self._metrics_server is not None:
+                self._metrics_server.shutdown()
+                self._metrics_server.server_close()
 
     async def _run_loop(self) -> None:
         interval = self.settings.update_frequency_ms / 1000
@@ -127,9 +137,11 @@ class Watcher:
             snapshot = await self.feed.get_snapshot(market)
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            self.metrics.inc("watcher_snapshot_errors_total", {"market": market})
             return
         if snapshot is None:
             return
+        self.metrics.inc("watcher_ticks_total", {"market": market})
 
         history = self._history[market]
         detections = []
@@ -139,16 +151,25 @@ class Watcher:
             except Exception:
                 logger.exception("Detector %s raised on %s", detector.name, market)
         history.append(snapshot)
+        for d in detections:
+            self.metrics.inc(
+                "watcher_detections_total", {"market": market, "detector": d.detector}
+            )
 
         try:
             if self.aggregator is not None:
                 # Consolidate into a single smoothed risk signal per market.
                 risk = self.aggregator.update(market, snapshot.timestamp, detections)
+                self.metrics.set(
+                    "watcher_risk_score", {"market": market}, self.aggregator.score(market)
+                )
                 if risk is not None:
-                    self.alert.emit([risk])
+                    emitted = self.alert.emit([risk])
+                    self.metrics.inc("watcher_alerts_emitted_total", {"market": market}, emitted)
             elif detections:
                 # Raw mode: one alert per detection.
-                self.alert.emit(detections)
+                emitted = self.alert.emit(detections)
+                self.metrics.inc("watcher_alerts_emitted_total", {"market": market}, emitted)
         except Exception:
             # A malformed Detection or a broken alert sink must not kill the
             # whole watcher — persistence below should still run.
@@ -172,6 +193,7 @@ class Watcher:
             )
         except Exception:
             logger.exception("Storage write failed for %s", market)
+            self.metrics.inc("watcher_storage_errors_total", {"market": market})
 
     def _banner(self) -> None:
         print("🔭 Drift Orderbook Watcher — read-only")
@@ -190,4 +212,7 @@ class Watcher:
             snaps = " + snapshots" if self.settings.persist_snapshots else ""
             print(f"   Storage   : {self.settings.db_path} "
                   f"(detections + risk{snaps})")
+        if self.settings.metrics_enabled:
+            print(f"   Metrics   : http://{self.settings.metrics_host}:"
+                  f"{self.settings.metrics_port}/metrics")
         print("   Press Ctrl+C to stop.\n")

@@ -56,3 +56,16 @@ def test_allows_private_webhook_host_when_explicitly_opted_in():
 
 def test_allows_public_https_webhook():
     Settings(**base_kwargs(alert_webhook_url="https://discord.com/api/webhooks/x/y"))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["repeated_min_count", "layering_min_levels", "flicker_min_events", "spoof_min_price_move"],
+)
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_rejects_non_positive_detector_thresholds(field, bad_value):
+    # Regression: these thresholds are used as divisors when a detector
+    # scores a finding — 0 or negative silently turned every tick into a
+    # ZeroDivisionError inside that detector instead of failing at startup.
+    with pytest.raises(ValueError, match="must be > 0"):
+        Settings(**base_kwargs(**{field: bad_value}))

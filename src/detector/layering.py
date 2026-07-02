@@ -16,8 +16,10 @@ class LayeringDetector(BaseDetector):
     name = "layering"
 
     def analyze(self, snapshot, history) -> list[Detection]:
-        detections: list[Detection] = []
         min_levels = self.settings.layering_min_levels
+        if min_levels <= 0:  # nonsensical threshold; avoid a ZeroDivisionError below
+            return []
+        detections: list[Detection] = []
         tolerance = self.settings.repeated_size_tolerance
 
         for side_name, levels in (("bid", snapshot.bids), ("ask", snapshot.asks)):

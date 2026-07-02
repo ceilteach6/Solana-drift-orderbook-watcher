@@ -51,6 +51,8 @@ class FlickerDetector(BaseDetector):
             all_keys |= keys
 
         min_events = self.settings.flicker_min_events
+        if min_events <= 0:  # nonsensical threshold; avoid a ZeroDivisionError below
+            return []
         flickering: list[tuple[int, tuple]] = []
         for key in all_keys:
             seq = [key in keys for keys in presence]

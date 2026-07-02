@@ -9,6 +9,7 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+from src.metrics import MetricsRegistry
 from src.watcher import Watcher, history_length
 
 
@@ -77,6 +78,7 @@ def test_tick_survives_a_broken_aggregator_or_alert_sink():
     watcher.aggregator = _BoomAggregator()
     watcher.alert = _BoomAlert()
     watcher.store = None
+    watcher.metrics = MetricsRegistry()
     watcher.settings = SimpleNamespace(persist_snapshots=False)
 
     # Must not raise.

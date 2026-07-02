@@ -32,6 +32,11 @@ class SpoofPullDetector(BaseDetector):
     name = "spoof_pull"
 
     def analyze(self, snapshot, history) -> list[Detection]:
+        if self.settings.spoof_min_price_move <= 0:
+            # Nonsensical threshold: it's used both as a skip-gate and as a
+            # divisor when scoring (`price_move / (2 * spoof_min_price_move)`);
+            # zero/negative would raise ZeroDivisionError below.
+            return []
         window = self.settings.spoof_window_sec
         now = snapshot.timestamp
 

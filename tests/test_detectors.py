@@ -74,6 +74,14 @@ def test_repeated_size_quiet_on_varied_sizes():
     assert det.analyze(s, []) == []
 
 
+def test_repeated_size_zero_threshold_is_quiet_not_a_zerodivisionerror():
+    # Regression: score = top.count / (min_count * 2) raised ZeroDivisionError
+    # whenever REPEATED_MIN_COUNT was misconfigured to 0 (or negative).
+    det = RepeatedSizeDetector(make_settings(repeated_min_count=0))
+    s = snap(bids=[(100, 10.0), (99, 10.0)], asks=[(101, 10.0)])
+    assert det.analyze(s, []) == []
+
+
 # --------------------------------------------------------------------------- #
 # Layering
 # --------------------------------------------------------------------------- #
@@ -92,6 +100,14 @@ def test_layering_fires_on_one_sided_wall():
 def test_layering_quiet_when_below_threshold():
     det = LayeringDetector(make_settings(layering_min_levels=5))
     s = snap(bids=[(100 - i, 50.0) for i in range(3)], asks=[(101, 1.0)])
+    assert det.analyze(s, []) == []
+
+
+def test_layering_zero_threshold_is_quiet_not_a_zerodivisionerror():
+    # Regression: score = top.count / (min_levels * 2) raised ZeroDivisionError
+    # whenever LAYERING_MIN_LEVELS was misconfigured to 0 (or negative).
+    det = LayeringDetector(make_settings(layering_min_levels=0))
+    s = snap(bids=[(100 - i, 50.0) for i in range(6)], asks=[(101, 1.0)])
     assert det.analyze(s, []) == []
 
 
@@ -148,6 +164,19 @@ def test_flicker_needs_minimum_samples():
     det = FlickerDetector(make_settings())
     s = snap(bids=[(100.0, 5.0)], asks=[(101.0, 1.0)])
     assert det.analyze(s, []) == []
+
+
+def test_flicker_zero_threshold_is_quiet_not_a_zerodivisionerror():
+    # Regression: score = transitions / (min_events * 2) raised
+    # ZeroDivisionError whenever FLICKER_MIN_EVENTS was misconfigured to 0.
+    det = FlickerDetector(make_settings(flicker_min_events=0, flicker_window_sec=10))
+    base = 4000.0
+    history = [
+        snap(bids=[(100.0, 5.0)] if i % 2 == 0 else [], asks=[(101.0, 1.0)], ts=base + i)
+        for i in range(6)
+    ]
+    current = history.pop()
+    assert det.analyze(current, history) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -303,6 +332,19 @@ def test_spoof_pull_fires_on_a_lone_resting_level_pulled():
     assert len(detections) == 1
     assert detections[0].details["side"] == "bid"
     assert detections[0].details["wall_size"] == 50.0
+
+
+def test_spoof_pull_zero_price_move_threshold_is_quiet_not_a_zerodivisionerror():
+    # Regression: move_factor = price_move / (2 * spoof_min_price_move) raised
+    # ZeroDivisionError whenever SPOOF_MIN_PRICE_MOVE was misconfigured to 0.
+    det = SpoofPullDetector(make_settings(spoof_min_price_move=0))
+    prior = _prior_with_bid_wall(ts=0.0)
+    current = snap(
+        bids=[(100.2, 1.0), (100.1, 1.0), (100.0, 1.0)],
+        asks=[(100.4, 1.0), (100.5, 1.0)],
+        ts=1.0,
+    )
+    assert det.analyze(current, [prior]) == []
 
 
 if __name__ == "__main__":

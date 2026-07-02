@@ -44,6 +44,7 @@ kész; csak az értékeket kell beírnod.
 | `src/selftest.py` — algoritmikus önteszt (`--selftest`) + élő health-check | ✅ kész |
 | `src/storage/sqlite_store.py` — time-series tárolás (SQLite) + `--dbstats` | ✅ kész |
 | `src/dashboard/` — TradingView Lightweight Charts dashboard (`--dashboard`) | ✅ kész (új) |
+| `src/metrics.py` — Prometheus exporter (`METRICS_ENABLED`) | ✅ kész (új) |
 | `src/watcher.py` — orchestrator | ✅ kész |
 | `examples/quickstart.py`, `tests/` | ✅ kész |
 | Push a távoli branchre | ❌ blokkolva (session-szintű 403, write-tiltás) |
@@ -79,13 +80,19 @@ nem avatkozik be. Prioritás szerinti felépítés:
   Lightweight Charts frontend. Ár + detekció-markerek + risk-panel, a SQLite-ból
   olvasva (WAL → a watcher közben ír). `python main.py --dashboard`. *(kész)*
 
+### Megfigyelhetőség ✅
+- **Prometheus exporter** (`src/metrics.py`) — a watcherrel egy folyamatban fut
+  (`METRICS_ENABLED=true`, `METRICS_PORT`), nincs külön process/flag/link, csak
+  egy scrape-cél URL. Poll-számok, snapshot/storage hibák, detekciók
+  detektoronként, kiküldött riasztások, aktuális risk-score — piaconként
+  címkézve. *(kész)*
+
 ### Következő építési pontok 🔜 (prioritás sorrendben)
 1. **Replay / backtesting** — elmentett napok újrajátszása, küszöbhangolás.
 2. **Multi-venue collectorok (egész Solana orderbook)** — lásd lent.
-3. **Prometheus metrics exporter** — detekciók/score-ok kitétele scrape-re.
-4. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
+3. **Wallet-szintű reputáció / blocklist** — ismétlődő gyanús makerek jelölése.
    (Adatforrás-link → user része.)
-5. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
+4. **ML-alapú anomáliadetektálás** — a heurisztikák mellé, baseline-tól való
    eltérés alapján (a perzisztált idősoron tanítva).
 
 ---

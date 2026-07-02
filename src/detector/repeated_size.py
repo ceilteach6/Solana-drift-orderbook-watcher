@@ -18,9 +18,11 @@ class RepeatedSizeDetector(BaseDetector):
         if not sizes:
             return []
 
+        min_count = self.settings.repeated_min_count
+        if min_count <= 0:  # nonsensical threshold; avoid a ZeroDivisionError below
+            return []
         clusters = cluster_sizes(sizes, self.settings.repeated_size_tolerance)
         top = clusters[0]
-        min_count = self.settings.repeated_min_count
         if top.count < min_count:
             return []
 

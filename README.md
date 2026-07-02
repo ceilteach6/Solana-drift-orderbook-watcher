@@ -120,6 +120,19 @@ python main.py --dashboard      # then open http://127.0.0.1:8787
 Shows the mid price with detection markers and a risk-level panel, reading
 straight from the SQLite store (the watcher can keep writing concurrently).
 
+### Metrics (Prometheus)
+Set `METRICS_ENABLED=true` to serve a `/metrics` endpoint (`METRICS_PORT`,
+default `9090`) alongside the watcher — no separate process or CLI flag,
+it starts when the watcher does:
+```bash
+METRICS_ENABLED=true python main.py
+curl http://127.0.0.1:9090/metrics
+```
+Exposes poll counts, snapshot/storage errors, detections per detector, alerts
+emitted, and the current risk score — all labeled by market — in the standard
+Prometheus text exposition format, ready to point an existing
+Prometheus/Grafana stack at.
+
 ---
 
 ## 🔧 How the Drift integration works

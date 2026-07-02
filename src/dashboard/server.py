@@ -61,6 +61,14 @@ def _make_handler(db_path: str):
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
+
+            # The static page doesn't consume `limit` — validate it only for
+            # the /api/* routes that do, so a stray/malformed `limit` query
+            # param on `/` (stale bookmark, browser extension, health-check
+            # probe) doesn't block the page with an unrelated 400.
+            if route in ("/", "/index.html"):
+                return self._send_html()
+
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
             try:
@@ -70,9 +78,6 @@ def _make_handler(db_path: str):
             if limit <= 0:
                 return self._send_json({"error": "limit must be positive"}, 400)
             limit = min(limit, _MAX_LIMIT)
-
-            if route in ("/", "/index.html"):
-                return self._send_html()
 
             # Each request opens its own short-lived read connection.
             store = SQLiteStore(db_path)
