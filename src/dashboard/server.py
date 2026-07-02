@@ -58,18 +58,21 @@ def _make_handler(db_path: str):
             self.end_headers()
             self.wfile.write(body)
 
+        def _parse_limit(self, params):
+            """Parse/clamp the ``limit`` query param. Returns (limit, error_response_or_None)."""
+            try:
+                limit = int((params.get("limit") or ["2000"])[0])
+            except (ValueError, TypeError):
+                return None, {"error": "limit must be an integer"}
+            if limit <= 0:
+                return None, {"error": "limit must be positive"}
+            return min(limit, _MAX_LIMIT), None
+
         def do_GET(self):
             parsed = urlparse(self.path)
             route = parsed.path
             params = parse_qs(parsed.query)
             market = (params.get("market") or [""])[0]
-            try:
-                limit = int((params.get("limit") or ["2000"])[0])
-            except (ValueError, TypeError):
-                return self._send_json({"error": "limit must be an integer"}, 400)
-            if limit <= 0:
-                return self._send_json({"error": "limit must be positive"}, 400)
-            limit = min(limit, _MAX_LIMIT)
 
             if route in ("/", "/index.html"):
                 return self._send_html()
@@ -83,6 +86,9 @@ def _make_handler(db_path: str):
                 if route == "/api/series":
                     if not market:
                         return self._send_json({"error": "market required"}, 400)
+                    limit, err = self._parse_limit(params)
+                    if err is not None:
+                        return self._send_json(err, 400)
                     return self._send_json({
                         "price": store.price_series(market, limit),
                         "risk": store.risk_series(market, limit),
@@ -90,6 +96,9 @@ def _make_handler(db_path: str):
                 if route == "/api/detections":
                     if not market:
                         return self._send_json({"error": "market required"}, 400)
+                    limit, err = self._parse_limit(params)
+                    if err is not None:
+                        return self._send_json(err, 400)
                     return self._send_json(store.detection_markers(market, limit))
                 return self._send_json({"error": "not found"}, 404)
             except Exception as exc:

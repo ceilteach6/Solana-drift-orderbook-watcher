@@ -80,23 +80,29 @@ class DriftStack:
                 settings.drift_env,
                 account_subscription=AccountSubscriptionConfig("websocket"),
             )
-            await drift_client.subscribe()
+            # Registered before awaiting subscribe(), not after: if
+            # subscribe() itself raises after partially opening its
+            # websocket/background listener (a realistic flaky-RPC outcome),
+            # the object still needs to be in `built` so _teardown() can
+            # unsubscribe/close it. Registering only on successful return
+            # would leak exactly that connection.
             built["drift_client"] = drift_client
+            await drift_client.subscribe()
 
             user_map = UserMap(UserMapConfig(drift_client, WebsocketConfig()))
-            await user_map.subscribe()
             built["user_map"] = user_map
+            await user_map.subscribe()
 
             slot_subscriber = SlotSubscriber(drift_client)
-            await slot_subscriber.subscribe()
             built["slot_subscriber"] = slot_subscriber
+            await slot_subscriber.subscribe()
 
             dlob_config = DLOBClientConfig(
                 drift_client, user_map, slot_subscriber, settings.update_frequency_ms
             )
             dlob_subscriber = DLOBSubscriber(config=dlob_config)
-            await dlob_subscriber.subscribe()
             built["dlob_subscriber"] = dlob_subscriber
+            await dlob_subscriber.subscribe()
         except Exception:
             await cls._teardown(built)
             raise

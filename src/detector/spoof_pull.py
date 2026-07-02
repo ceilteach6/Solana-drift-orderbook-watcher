@@ -41,7 +41,10 @@ class SpoofPullDetector(BaseDetector):
             return []
 
         mid_now = snapshot.mid
-        if not mid_now:
+        # `is None` (not truthiness): a legitimate mid of exactly 0.0 must
+        # not be treated as "no price data" and silently disable this
+        # detector for the tick.
+        if mid_now is None:
             return []
 
         # For each side, consider every prior snapshot as a possible "wall was
@@ -57,6 +60,12 @@ class SpoofPullDetector(BaseDetector):
             best: tuple[float, float, float, float, float] | None = None
             for prior_snap in prior:
                 mid_then = prior_snap.mid
+                # Unlike mid_now above, mid_then is used as the divisor in
+                # price_move below, so a *literal* 0.0 has to be skipped too
+                # (not just None) — a relative price move is undefined at a
+                # zero base, and dividing by it would raise
+                # ZeroDivisionError. This is deliberately not the same fix as
+                # mid_now / sqlite_store's spread check.
                 if not mid_then:
                     continue
                 price_move = (mid_now - mid_then) / mid_then

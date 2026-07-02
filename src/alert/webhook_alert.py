@@ -44,12 +44,10 @@ class WebhookAlert(Alert):
 
     def deliver(self, detection) -> None:
         """Queue HTTP delivery on a bounded pool to avoid blocking the event loop."""
-        payload, url = self._build_request(detection)
-        if not url:
-            return
-        _DELIVERY_POOL.submit(self._send, payload, url)
+        for target, payload, url in self._build_requests(detection):
+            _DELIVERY_POOL.submit(self._send, target, payload, url)
 
-    def _send(self, payload: dict, url: str) -> None:
+    def _send(self, target: str, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}
@@ -58,27 +56,30 @@ class WebhookAlert(Alert):
             with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
                 resp.read()
         except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+            logger.warning("Webhook delivery failed (%s): %s", target, exc)
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:
         return f"🔭 [{d.market}] {d.detector} (score {d.score:.2f}) — {d.message}"
 
-    def _target(self) -> str:
-        if getattr(self.settings, "telegram_bot_token", ""):
-            return "telegram"
-        return "webhook"
+    def _build_requests(self, d):
+        """Build one (target, payload, url) tuple per configured channel.
 
-    def _build_request(self, d):
+        Telegram and the generic webhook are independent channels — a user who
+        sets up both (e.g. Telegram + Discord) expects delivery to both, not
+        one silently shadowing the other.
+        """
+        requests = []
+
         token = getattr(self.settings, "telegram_bot_token", "")
         chat_id = getattr(self.settings, "telegram_chat_id", "")
         if token and chat_id:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            return {"chat_id": chat_id, "text": self._text(d)}, url
+            requests.append(("telegram", {"chat_id": chat_id, "text": self._text(d)}, url))
 
         url = getattr(self.settings, "alert_webhook_url", "")
         if url:
             # Discord uses {"content": ...}; most generic webhooks accept it too.
-            return {"content": self._text(d)}, url
+            requests.append(("webhook", {"content": self._text(d)}, url))
 
-        return None, None
+        return requests

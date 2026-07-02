@@ -139,6 +139,62 @@ class Settings:
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+        # Every detector's "min count/levels/events" threshold is used as a
+        # divisor (or an implicit non-empty-cluster guard) in its scoring
+        # math. A value <= 0 isn't a stricter/looser threshold — it's a
+        # guaranteed ZeroDivisionError/IndexError on the next tick that has
+        # any data, which silently disables that detector for the rest of
+        # the run (caught and logged per-detector in Watcher._tick). Fail
+        # fast here instead, at the config boundary.
+        for field_name, value in (
+            ("REPEATED_MIN_COUNT", self.repeated_min_count),
+            ("LAYERING_MIN_LEVELS", self.layering_min_levels),
+            ("FLICKER_MIN_EVENTS", self.flicker_min_events),
+        ):
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1 (got {value})")
+        if self.spoof_min_price_move <= 0:
+            raise ValueError(
+                f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move}); "
+                "it is used as a divisor in spoof_pull's scoring"
+            )
+        if self.update_frequency_ms < 1:
+            raise ValueError(
+                f"UPDATE_FREQUENCY_MS must be >= 1 (got {self.update_frequency_ms}); "
+                "a value <= 0 turns the poll loop into a tight busy-loop against the RPC"
+            )
+        if not 0.0 <= self.risk_smoothing <= 1.0:
+            raise ValueError(
+                f"RISK_SMOOTHING must be within [0, 1] (got {self.risk_smoothing}); "
+                "it is an EMA alpha and a value outside this range lets the smoothed "
+                "risk score escape [0, 1], breaking the alert/clear hysteresis"
+            )
+        # Both flicker and spoof-pull only ever look at *prior* snapshots that
+        # fall within their own window (see src/detector/flicker.py and
+        # spoof_pull.py); which prior snapshots exist is entirely a function
+        # of the poll interval. If the window is too small relative to
+        # UPDATE_FREQUENCY_MS, not enough snapshots (or not enough
+        # transitions) can ever land inside it, and the detector silently
+        # never fires again — no error, indistinguishable from "market is
+        # quiet". This is invisible at review time since the three settings
+        # live in unrelated sections of the config.
+        interval_sec = self.update_frequency_ms / 1000.0
+        min_flicker_window = self.flicker_min_events * interval_sec
+        if self.flicker_window_sec < min_flicker_window:
+            raise ValueError(
+                f"FLICKER_WINDOW_SEC ({self.flicker_window_sec}s) is too small for "
+                f"FLICKER_MIN_EVENTS={self.flicker_min_events} at UPDATE_FREQUENCY_MS="
+                f"{self.update_frequency_ms} ({interval_sec:.3f}s/poll); needs >= "
+                f"{min_flicker_window:.3f}s, or fewer than {self.flicker_min_events} "
+                "transitions can ever land inside the window and flicker can never fire"
+            )
+        if self.spoof_window_sec < interval_sec:
+            raise ValueError(
+                f"SPOOF_WINDOW_SEC ({self.spoof_window_sec}s) is smaller than the poll "
+                f"interval (UPDATE_FREQUENCY_MS={self.update_frequency_ms} -> "
+                f"{interval_sec:.3f}s); no prior snapshot can ever fall inside the "
+                "window and spoof-pull can never fire"
+            )
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,

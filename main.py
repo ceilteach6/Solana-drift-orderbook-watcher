@@ -22,6 +22,7 @@ Serve the charting dashboard (reads the stored time-series):
 """
 
 import asyncio
+import os
 import sys
 
 from config.settings import settings
@@ -41,6 +42,11 @@ if __name__ == "__main__":
 
     if "--dbstats" in sys.argv[1:]:
         from src.storage import SQLiteStore
+
+        if not os.path.exists(settings.db_path):
+            print(f"❌ DB not found: {settings.db_path}")
+            print("   Run the watcher with STORAGE_ENABLED=true first.")
+            sys.exit(1)
 
         store = SQLiteStore(settings.db_path)
         store.connect()
