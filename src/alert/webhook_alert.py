@@ -49,6 +49,14 @@ class WebhookAlert(Alert):
             return
         _DELIVERY_POOL.submit(self._send, payload, url)
 
+    def close(self) -> None:
+        # Mirrors DriftOrderbookFeed._executor's shutdown: cancel queued
+        # (not-yet-started) deliveries so process exit isn't held hostage by
+        # an alert-storm backlog. Python's own atexit hook still joins any
+        # already-running worker, but that's bounded by _send's 5s urlopen
+        # timeout rather than by however many jobs were queued behind it.
+        _DELIVERY_POOL.shutdown(wait=False, cancel_futures=True)
+
     def _send(self, payload: dict, url: str) -> None:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(

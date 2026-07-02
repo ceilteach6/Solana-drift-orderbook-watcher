@@ -9,6 +9,8 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from src.watcher import Watcher, history_length
 
 
@@ -119,3 +121,96 @@ def test_persist_runs_the_blocking_store_write_off_the_event_loop():
 
     assert len(watcher.store.calls) == 1
     assert watcher.store.calls[0] != main_thread
+
+
+class _RecordingFeed:
+    def __init__(self):
+        self.closed = False
+
+    async def get_snapshot(self, market):
+        return None
+
+    async def close(self):
+        self.closed = True
+
+
+class _RecordingAlertDispatcher:
+    def __init__(self):
+        self.closed = False
+        self.sinks = []
+
+    def close(self):
+        self.closed = True
+
+
+class _RecordingSQLiteStore:
+    def __init__(self):
+        self.connected = False
+        self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_start_closes_feed_alert_and_store_on_clean_stop(monkeypatch):
+    # Regression: the webhook alert sink's delivery pool was never shut down
+    # anywhere, which could hold the process open at exit behind a queued
+    # backlog. start() must close every resource it opened, every time —
+    # not just the feed and store.
+    import src.watcher as watcher_module
+
+    feed = _RecordingFeed()
+    monkeypatch.setattr(watcher_module, "create_feed", lambda settings: _async_return(feed))
+
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(
+        markets=["SOL-PERP"], update_frequency_ms=1000, run_duration_sec=0.001,
+        healthcheck_enabled=False,
+    )
+    watcher.detectors = []
+    watcher.aggregator = None
+    watcher.alert = _RecordingAlertDispatcher()
+    watcher.store = _RecordingSQLiteStore()
+    watcher.feed = None
+    watcher._last_healthcheck = 0.0
+    watcher._history = {"SOL-PERP": []}
+    watcher._banner = lambda: None
+
+    asyncio.run(watcher.start())
+
+    assert feed.closed
+    assert watcher.alert.closed
+    assert watcher.store.closed
+
+
+def test_start_still_closes_store_and_alert_if_feed_creation_fails(monkeypatch):
+    # Regression: store.connect() and create_feed() used to run before the
+    # try/finally, so a cancelled/failed create_feed() left the store
+    # connection (and any already-open sinks) never closed.
+    import src.watcher as watcher_module
+
+    async def _boom(settings):
+        raise RuntimeError("simulated feed creation failure")
+
+    monkeypatch.setattr(watcher_module, "create_feed", _boom)
+
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(markets=["SOL-PERP"])
+    watcher.alert = _RecordingAlertDispatcher()
+    watcher.store = _RecordingSQLiteStore()
+    watcher.feed = None
+    watcher._banner = lambda: None
+
+    with pytest.raises(RuntimeError, match="simulated feed creation failure"):
+        asyncio.run(watcher.start())
+
+    assert watcher.store.connected
+    assert watcher.store.closed
+    assert watcher.alert.closed
+
+
+async def _async_return(value):
+    return value

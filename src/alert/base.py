@@ -27,6 +27,9 @@ class Alert:
         """Deliver one (already score-filtered) detection."""
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Release any resources held by this sink. Override if needed."""
+
 
 class AlertDispatcher:
     """Filters detections by score and delivers them to all sinks."""
@@ -48,3 +51,11 @@ class AlertDispatcher:
                     logger.exception("Alert sink %s failed", sink.name)
             emitted += 1
         return emitted
+
+    def close(self) -> None:
+        """Shut down every sink. Call once, on watcher shutdown."""
+        for sink in self.sinks:
+            try:
+                sink.close()
+            except Exception:
+                logger.exception("Alert sink %s failed to close", sink.name)

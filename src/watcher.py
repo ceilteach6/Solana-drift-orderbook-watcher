@@ -66,13 +66,15 @@ class Watcher:
             datefmt="%H:%M:%S",
         )
         self._banner()
-        if self.store is not None:
-            self.store.connect()
-        self.feed = await create_feed(self.settings)
         try:
+            if self.store is not None:
+                self.store.connect()
+            self.feed = await create_feed(self.settings)
             await self._run_loop()
         finally:
-            await self.feed.close()
+            if self.feed is not None:
+                await self.feed.close()
+            self.alert.close()
             if self.store is not None:
                 self.store.close()
 

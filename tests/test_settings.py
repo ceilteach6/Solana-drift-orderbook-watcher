@@ -56,3 +56,52 @@ def test_allows_private_webhook_host_when_explicitly_opted_in():
 
 def test_allows_public_https_webhook():
     Settings(**base_kwargs(alert_webhook_url="https://discord.com/api/webhooks/x/y"))
+
+
+def test_rejects_webhook_pointed_at_localhost_hostname():
+    with pytest.raises(ValueError, match="private/internal"):
+        Settings(**base_kwargs(alert_webhook_url="http://localhost:8080/hook"))
+
+
+def test_rejects_webhook_pointed_at_dot_localhost_hostname():
+    with pytest.raises(ValueError, match="private/internal"):
+        Settings(**base_kwargs(alert_webhook_url="http://foo.localhost:8080/hook"))
+
+
+def test_allows_localhost_webhook_when_explicitly_opted_in():
+    Settings(
+        **base_kwargs(
+            alert_webhook_url="http://localhost:8080/hook",
+            alert_webhook_allow_private_host=True,
+        )
+    )  # must not raise
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["repeated_min_count", "layering_min_levels", "flicker_min_events", "imbalance_min_levels"],
+)
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_rejects_non_positive_detector_count_thresholds(field, bad_value):
+    # Each of these gates a `count / (min_threshold * 2)` score computation
+    # in a detector; zero/negative lets a ZeroDivisionError (or, for
+    # layering, an IndexError) through on the very first tick instead of
+    # failing fast at startup.
+    with pytest.raises(ValueError, match="must be >= 1"):
+        Settings(**base_kwargs(**{field: bad_value}))
+
+
+@pytest.mark.parametrize("bad_value", [0, -0.001])
+def test_rejects_non_positive_spoof_min_price_move(bad_value):
+    with pytest.raises(ValueError, match="must be > 0"):
+        Settings(**base_kwargs(spoof_min_price_move=bad_value))
+
+
+@pytest.mark.parametrize("bad_value", [0, -0.1, 1.1, 2.0])
+def test_rejects_out_of_range_risk_smoothing(bad_value):
+    with pytest.raises(ValueError, match="RISK_SMOOTHING"):
+        Settings(**base_kwargs(risk_smoothing=bad_value))
+
+
+def test_allows_risk_smoothing_boundary_value_one():
+    Settings(**base_kwargs(risk_smoothing=1.0))  # must not raise

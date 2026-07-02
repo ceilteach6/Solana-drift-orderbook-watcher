@@ -41,6 +41,11 @@ def _validate_webhook_url(url: str, *, allow_private_host: bool) -> None:
         raise ValueError("ALERT_WEBHOOK_URL is missing a host")
     if allow_private_host:
         return
+    if _is_loopback_hostname(parsed.hostname):
+        raise ValueError(
+            f"ALERT_WEBHOOK_URL points at a private/internal address ({parsed.hostname}); "
+            "set ALERT_WEBHOOK_ALLOW_PRIVATE_HOST=true if this is intentional"
+        )
     try:
         ip = ipaddress.ip_address(parsed.hostname)
     except ValueError:
@@ -50,6 +55,27 @@ def _validate_webhook_url(url: str, *, allow_private_host: bool) -> None:
             f"ALERT_WEBHOOK_URL points at a private/internal address ({parsed.hostname}); "
             "set ALERT_WEBHOOK_ALLOW_PRIVATE_HOST=true if this is intentional"
         )
+
+
+_LOOPBACK_HOSTNAMES = {"localhost"}
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    # ``localhost`` (and ``*.localhost``, reserved for loopback use by RFC
+    # 6761) resolve to a loopback address without a DNS lookup, so the
+    # IP-literal check above alone lets them slip through the SSRF guard.
+    hostname = hostname.lower()
+    return hostname in _LOOPBACK_HOSTNAMES or hostname.endswith(".localhost")
+
+
+def _require_positive_int(name: str, value: int) -> None:
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1 (got {value})")
+
+
+def _require_positive_float(name: str, value: float) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0 (got {value})")
 
 
 def _get_int(name: str, default: int) -> int:
@@ -143,6 +169,22 @@ class Settings:
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,
         )
+        # Every detector normalizes its hit-count into a 0..1 score via
+        # ``count / (min_threshold * 2)``; a zero or negative threshold
+        # turns that guard into a division by zero (or, for layering's
+        # ``clusters[0]`` lookup, an IndexError) on the very first tick.
+        # Reject these at startup instead of letting a single bad env var
+        # silently kill one detector for the life of the process.
+        _require_positive_int("REPEATED_MIN_COUNT", self.repeated_min_count)
+        _require_positive_int("LAYERING_MIN_LEVELS", self.layering_min_levels)
+        _require_positive_int("FLICKER_MIN_EVENTS", self.flicker_min_events)
+        _require_positive_int("IMBALANCE_MIN_LEVELS", self.imbalance_min_levels)
+        _require_positive_float("SPOOF_MIN_PRICE_MOVE", self.spoof_min_price_move)
+        if not 0.0 < self.risk_smoothing <= 1.0:
+            raise ValueError(
+                f"RISK_SMOOTHING must be in (0, 1] (got {self.risk_smoothing}); "
+                "an out-of-range EMA alpha makes the risk score unstable"
+            )
 
 
 def load_settings() -> Settings:
