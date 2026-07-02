@@ -139,6 +139,19 @@ class Settings:
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+        # repeated_size/layering/flicker each divide their score by
+        # 2 * this threshold. Unlike imbalance_min_total_volume (documented
+        # "0 = disabled"), 0 here is not a valid "most sensitive" sentinel —
+        # it's a ZeroDivisionError on every tick, permanently and silently
+        # (via the per-detector try/except in Watcher._tick) disabling the
+        # detector. Reject it at startup instead of at first tick.
+        for field_name, value in (
+            ("REPEATED_MIN_COUNT", self.repeated_min_count),
+            ("LAYERING_MIN_LEVELS", self.layering_min_levels),
+            ("FLICKER_MIN_EVENTS", self.flicker_min_events),
+        ):
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1 (got {value})")
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,

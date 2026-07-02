@@ -95,6 +95,24 @@ def test_layering_quiet_when_below_threshold():
     assert det.analyze(s, []) == []
 
 
+def test_layering_does_not_crash_with_zero_threshold_and_empty_side():
+    # Settings now rejects LAYERING_MIN_LEVELS=0 at startup, but the detector
+    # itself must stay safe against a threshold of 0 reaching it some other
+    # way (e.g. a hand-built settings object, as here) — a book with one
+    # empty side used to raise IndexError (clusters[0] on []), since
+    # ``len(sizes) < min_levels`` never trips when min_levels is 0.
+    det = LayeringDetector(make_settings(layering_min_levels=0))
+    s = snap(bids=[], asks=[(101, 1.0), (102, 1.0)])
+    detections = det.analyze(s, [])  # must not raise IndexError
+    assert all(d.details["side"] != "bid" for d in detections)
+
+
+def test_repeated_size_does_not_crash_with_zero_threshold():
+    det = RepeatedSizeDetector(make_settings(repeated_min_count=0))
+    s = snap(bids=[(100, 10.0)], asks=[(101, 10.0)])
+    assert det.analyze(s, []) != []  # must not raise ZeroDivisionError
+
+
 # --------------------------------------------------------------------------- #
 # Flicker
 # --------------------------------------------------------------------------- #
@@ -142,6 +160,16 @@ def test_flicker_quiet_on_stable_book():
     ]
     current = history.pop()
     assert det.analyze(current, history) == []
+
+
+def test_flicker_does_not_crash_with_zero_threshold():
+    det = FlickerDetector(make_settings(flicker_min_events=0, flicker_window_sec=10))
+    base = 4000.0
+    history = [
+        snap(bids=[(100.0, 5.0)], asks=[(101.0, 1.0)], ts=base + i) for i in range(6)
+    ]
+    current = history.pop()
+    assert det.analyze(current, history) != []  # must not raise ZeroDivisionError
 
 
 def test_flicker_needs_minimum_samples():

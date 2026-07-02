@@ -66,7 +66,7 @@ class FlickerDetector(BaseDetector):
 
         detections: list[Detection] = []
         for transitions, (side, price) in flickering[:_MAX_DETECTIONS_PER_TICK]:
-            score = min(1.0, transitions / (min_events * 2))
+            score = min(1.0, transitions / (max(min_events, 1) * 2))
             detections.append(
                 Detection(
                     detector=self.name,

@@ -24,7 +24,7 @@ class RepeatedSizeDetector(BaseDetector):
         if top.count < min_count:
             return []
 
-        score = min(1.0, top.count / (min_count * 2))
+        score = min(1.0, top.count / (max(min_count, 1) * 2))
         return [
             Detection(
                 detector=self.name,

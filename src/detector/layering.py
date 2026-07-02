@@ -22,14 +22,18 @@ class LayeringDetector(BaseDetector):
 
         for side_name, levels in (("bid", snapshot.bids), ("ask", snapshot.asks)):
             sizes = [lvl.size for lvl in levels if lvl.size > 0]
-            if len(sizes) < min_levels:
+            # ``not sizes`` (rather than relying solely on the length check
+            # below) also covers min_levels <= 0: settings validation now
+            # rejects that at startup, but this keeps an empty side from ever
+            # reaching clusters[0] on an empty list regardless.
+            if not sizes or len(sizes) < min_levels:
                 continue
             clusters = cluster_sizes(sizes, tolerance)
             top = clusters[0]
             if top.count < min_levels:
                 continue
 
-            score = min(1.0, top.count / (min_levels * 2))
+            score = min(1.0, top.count / (max(min_levels, 1) * 2))
             detections.append(
                 Detection(
                     detector=self.name,
