@@ -11,6 +11,7 @@ regression test to stay caught.
 """
 
 import asyncio
+import os
 import threading
 from types import SimpleNamespace
 
@@ -104,3 +105,43 @@ def test_close_shuts_down_the_executor_without_blocking():
     feed._stack = None
     asyncio.run(feed.close())  # must not raise even with no stack connected
     assert feed._executor._shutdown
+
+
+def test_close_arms_a_shutdown_watchdog_only_at_interpreter_exit(monkeypatch):
+    # Regression: executor.shutdown(wait=False) does not stop CPython's own
+    # atexit hook (concurrent.futures.thread._python_exit) from
+    # unconditionally joining every worker thread ever created, including one
+    # wedged in a blocking RPC call that ignored snapshot_timeout_sec. The
+    # watchdog must be armed via atexit (so it never fires while the process
+    # is simply continuing to run), not started immediately in close().
+    registered = []
+    monkeypatch.setattr("src.collector.orderbook_feed.atexit.register", registered.append)
+
+    started_timers = []
+
+    class _FakeTimer:
+        def __init__(self, interval, func, args=()):
+            self.interval = interval
+            self.func = func
+            self.args = args
+            self.daemon = False
+
+        def start(self):
+            started_timers.append(self)
+
+    monkeypatch.setattr("src.collector.orderbook_feed.threading.Timer", _FakeTimer)
+
+    feed = DriftOrderbookFeed(SimpleNamespace(markets=["SOL-PERP"], snapshot_timeout_sec=5.0))
+    feed._stack = None
+    asyncio.run(feed.close())
+
+    assert len(registered) == 1
+    assert not started_timers  # not armed yet -- only registered for atexit
+
+    registered[0]()  # simulate the interpreter beginning to exit
+    assert len(started_timers) == 1
+    timer = started_timers[0]
+    assert timer.interval == 10.0  # snapshot_timeout_sec(5.0) + 5.0 grace
+    assert timer.func is os._exit
+    assert timer.args == (1,)
+    assert timer.daemon is True

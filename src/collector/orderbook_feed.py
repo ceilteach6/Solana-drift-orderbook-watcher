@@ -20,8 +20,11 @@ synthetic one if ``driftpy`` is unavailable or the connection fails, so
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
+import os
 import random
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -130,9 +133,38 @@ class DriftOrderbookFeed(OrderbookFeed):
     async def close(self) -> None:
         if self._stack is not None:
             await self._stack.close()
-        # Don't block shutdown waiting on threads possibly still stuck in a
-        # blocking RPC call.
+        # shutdown(wait=False) only stops *this* method from blocking. It does
+        # NOT stop CPython's own atexit hook (concurrent.futures.thread's
+        # _python_exit) from unconditionally joining every worker thread ever
+        # created by any ThreadPoolExecutor in the process — including one
+        # wedged inside a blocking get_l2_orderbook_sync call that ignored
+        # snapshot_timeout_sec (that timeout only cancels the await, not the
+        # thread; Python threads can't be force-killed). Without the watchdog
+        # below, a single stuck poll hangs the whole process at interpreter
+        # exit, silently defeating systemd/Docker/k8s restart-on-exit.
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._arm_shutdown_watchdog()
+
+    def _arm_shutdown_watchdog(self) -> None:
+        """Guarantee the process actually terminates even if a worker thread
+        is unkillably wedged in a blocking RPC call.
+
+        Arms only at interpreter-exit time (via ``atexit``), not immediately —
+        this must not fire while the process is otherwise healthy and simply
+        continuing to run (e.g. the dashboard, or a long test session).
+        ``atexit`` callbacks run LIFO, and ``concurrent.futures.thread``
+        registers its own thread-joining hook at import time, before this
+        method ever runs — so registering here guarantees our watchdog starts
+        counting down *before* that hook can block on ``Thread.join()``.
+        """
+        grace = max(getattr(self.settings, "snapshot_timeout_sec", 5.0), 1.0) + 5.0
+
+        def _start_timer() -> None:
+            timer = threading.Timer(grace, os._exit, args=(1,))
+            timer.daemon = True
+            timer.start()
+
+        atexit.register(_start_timer)
 
 
 def _to_raw(value) -> float:

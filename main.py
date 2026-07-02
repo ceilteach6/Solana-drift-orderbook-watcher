@@ -22,6 +22,8 @@ Serve the charting dashboard (reads the stored time-series):
 """
 
 import asyncio
+import contextlib
+import signal
 import sys
 
 from config.settings import settings
@@ -30,7 +32,39 @@ from src.watcher import Watcher
 
 async def main():
     watcher = Watcher(settings)
-    await watcher.start()
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+
+    # SIGTERM is what Docker/k8s/systemd send on a normal stop/restart;
+    # SIGINT is Ctrl+C. Python's default disposition for SIGTERM is immediate
+    # termination (unlike SIGINT, which raises a catchable KeyboardInterrupt),
+    # so without this handler Watcher.start()'s `finally` — which closes the
+    # feed's RPC/websocket connections and the SQLite store — never runs on
+    # `docker stop` / pod deletion. Routing both signals through the same
+    # cancellation path makes shutdown behave identically either way.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass  # e.g. Windows, where add_signal_handler isn't supported
+
+    watcher_task = asyncio.create_task(watcher.start())
+    stop_task = asyncio.create_task(stop.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {watcher_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if watcher_task in done:
+            watcher_task.result()  # propagate a real failure, if any
+        else:
+            print("\n⏹️  Shutting down (signal received)…")
+            watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher_task
+    finally:
+        stop_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stop_task
 
 
 if __name__ == "__main__":

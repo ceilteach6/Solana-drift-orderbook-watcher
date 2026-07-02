@@ -39,6 +39,19 @@ def history_length(settings) -> int:
     return max(8, int(widest_window / interval) + 4)
 
 
+def stale_feed_after_sec(settings) -> float:
+    """How long a market may go without a *successful* snapshot before the
+    feed is considered stuck rather than just having a slow tick.
+
+    Wide enough to absorb a handful of consecutive timed-out/failed polls
+    (each already bounded by ``snapshot_timeout_sec``) without false-alarming
+    on ordinary jitter, but bounded so a genuinely hung feed is caught in
+    well under the default health-check interval.
+    """
+    return max(getattr(settings, "snapshot_timeout_sec", 5.0) * 3,
+               settings.update_frequency_ms / 1000 * 5, 30.0)
+
+
 class Watcher:
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -48,6 +61,16 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+
+        # Liveness tracking: the periodic health-check below only proves the
+        # detector *logic* still works against canned data — it says nothing
+        # about whether get_snapshot() is actually succeeding. A stuck RPC
+        # (see DriftOrderbookFeed) would otherwise poll forever, fail every
+        # tick, and never trip an alert. _check_liveness catches that.
+        self._stale_after = stale_feed_after_sec(settings)
+        self._last_ok: dict[str, float] = {}
+        self._stale_alerted: set[str] = set()
+        self._started_at: float = 0.0
 
         history_len = history_length(settings)
         self._history: dict[str, deque] = {
@@ -81,17 +104,51 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._started_at = start
 
         while True:
             for market in self.settings.markets:
                 await self._tick(market)
 
+            self._check_liveness()
             self._maybe_healthcheck()
 
             if duration and (time.monotonic() - start) >= duration:
                 logger.info("Run duration reached (%.0fs) — stopping.", duration)
                 return
             await asyncio.sleep(interval)
+
+    def _check_liveness(self) -> None:
+        """Alert once when a market has gone too long without a successful
+        snapshot — independent of the synthetic-scenario health-check, which
+        only exercises detector logic and would stay "green" even if the
+        feed itself is completely stuck."""
+        now = time.monotonic()
+        for market in self.settings.markets:
+            since = now - self._last_ok.get(market, self._started_at)
+            if since < self._stale_after:
+                self._stale_alerted.discard(market)
+                continue
+            if market in self._stale_alerted:
+                continue  # already alerted; stays quiet until a fresh snapshot lands
+            self._stale_alerted.add(market)
+            logger.error(
+                "No successful snapshot for %s in %.0fs — feed may be stuck/hung",
+                market, since,
+            )
+            try:
+                self.alert.emit([
+                    Detection(
+                        detector="liveness",
+                        market=market,
+                        score=1.0,
+                        message=f"No successful orderbook snapshot for {market} in "
+                                f"{since:.0f}s — feed may be stuck",
+                        details={"stale_sec": round(since, 1)},
+                    )
+                ])
+            except Exception:
+                logger.exception("Liveness alert emission failed for %s", market)
 
     def _maybe_healthcheck(self) -> None:
         if not self.settings.healthcheck_enabled:
@@ -130,6 +187,7 @@ class Watcher:
             return
         if snapshot is None:
             return
+        self._last_ok[market] = time.monotonic()
 
         history = self._history[market]
         detections = []

@@ -7,9 +7,10 @@ orchestration loop, which needs a live/synthetic feed).
 
 import asyncio
 import threading
+import time
 from types import SimpleNamespace
 
-from src.watcher import Watcher, history_length
+from src.watcher import Watcher, history_length, stale_feed_after_sec
 
 
 def settings(**overrides):
@@ -39,6 +40,70 @@ def test_history_length_covers_flicker_when_it_is_the_wider_window():
 def test_history_length_has_a_floor():
     n = history_length(settings(flicker_window_sec=0.1, spoof_window_sec=0.1))
     assert n >= 8
+
+
+def test_stale_feed_after_sec_absorbs_a_few_timed_out_polls():
+    # Must comfortably exceed a handful of snapshot_timeout_sec-bounded
+    # failures so ordinary jitter/timeouts don't trip a false liveness alert.
+    n = stale_feed_after_sec(settings(snapshot_timeout_sec=5.0))
+    assert n >= 3 * 5.0
+
+
+def test_stale_feed_after_sec_has_a_floor_for_fast_polling():
+    n = stale_feed_after_sec(settings(update_frequency_ms=10, snapshot_timeout_sec=0.01))
+    assert n >= 30.0
+
+
+class _RecordingAlert:
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, detections):
+        self.emitted.extend(detections)
+
+
+def test_check_liveness_alerts_once_when_a_market_goes_stale():
+    # Regression: the periodic health-check only replays canned scenarios
+    # through the detectors — it never proves get_snapshot() itself is still
+    # succeeding, so a hung feed produced zero alerts forever. _check_liveness
+    # is the independent signal that catches that.
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(markets=("SOL-PERP",))
+    watcher.alert = _RecordingAlert()
+    watcher._stale_after = 10.0
+    watcher._started_at = time.monotonic() - 100.0  # long past the threshold
+    watcher._last_ok = {}
+    watcher._stale_alerted = set()
+
+    watcher._check_liveness()
+    assert len(watcher.alert.emitted) == 1
+    assert watcher.alert.emitted[0].detector == "liveness"
+
+    # Stays quiet on the next call instead of re-alerting every loop tick.
+    watcher._check_liveness()
+    assert len(watcher.alert.emitted) == 1
+
+
+def test_check_liveness_clears_after_a_fresh_snapshot():
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(markets=("SOL-PERP",))
+    watcher.alert = _RecordingAlert()
+    watcher._stale_after = 10.0
+    watcher._started_at = time.monotonic() - 100.0
+    watcher._last_ok = {}
+    watcher._stale_alerted = set()
+
+    watcher._check_liveness()
+    assert len(watcher.alert.emitted) == 1
+
+    watcher._last_ok["SOL-PERP"] = time.monotonic()
+    watcher._check_liveness()
+    assert "SOL-PERP" not in watcher._stale_alerted
+
+    # A later relapse must alert again, not stay silently suppressed forever.
+    watcher._last_ok["SOL-PERP"] = time.monotonic() - 100.0
+    watcher._check_liveness()
+    assert len(watcher.alert.emitted) == 2
 
 
 class _RecordingStore:
@@ -74,6 +139,7 @@ def test_tick_survives_a_broken_aggregator_or_alert_sink():
     watcher.feed = _EmptyFeed()
     watcher.detectors = []
     watcher._history = {"SOL-PERP": []}
+    watcher._last_ok = {}
     watcher.aggregator = _BoomAggregator()
     watcher.alert = _BoomAlert()
     watcher.store = None
