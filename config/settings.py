@@ -139,6 +139,36 @@ class Settings:
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+        # Every detector's "min count/levels/events" threshold is used as a
+        # divisor (or an implicit non-empty-cluster guard) in its scoring
+        # math. A value <= 0 isn't a stricter/looser threshold — it's a
+        # guaranteed ZeroDivisionError/IndexError on the next tick that has
+        # any data, which silently disables that detector for the rest of
+        # the run (caught and logged per-detector in Watcher._tick). Fail
+        # fast here instead, at the config boundary.
+        for field_name, value in (
+            ("REPEATED_MIN_COUNT", self.repeated_min_count),
+            ("LAYERING_MIN_LEVELS", self.layering_min_levels),
+            ("FLICKER_MIN_EVENTS", self.flicker_min_events),
+        ):
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1 (got {value})")
+        if self.spoof_min_price_move <= 0:
+            raise ValueError(
+                f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move}); "
+                "it is used as a divisor in spoof_pull's scoring"
+            )
+        if self.update_frequency_ms < 1:
+            raise ValueError(
+                f"UPDATE_FREQUENCY_MS must be >= 1 (got {self.update_frequency_ms}); "
+                "a value <= 0 turns the poll loop into a tight busy-loop against the RPC"
+            )
+        if not 0.0 <= self.risk_smoothing <= 1.0:
+            raise ValueError(
+                f"RISK_SMOOTHING must be within [0, 1] (got {self.risk_smoothing}); "
+                "it is an EMA alpha and a value outside this range lets the smoothed "
+                "risk score escape [0, 1], breaking the alert/clear hysteresis"
+            )
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,
