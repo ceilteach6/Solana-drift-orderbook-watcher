@@ -127,6 +127,36 @@ def test_record_tick_persists_snapshot_only_when_requested(tmp_path):
     store.close()
 
 
+def test_load_snapshots_roundtrips_bids_and_asks(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(ts=1.0), [], risk=None, persist_snapshot=True)
+    store.record_tick("SOL-PERP", snap(ts=2.0), [], risk=None, persist_snapshot=True)
+
+    loaded = store.load_snapshots("SOL-PERP")
+    assert [s.timestamp for s in loaded] == [1.0, 2.0]  # ascending
+    assert [(l.price, l.size) for l in loaded[0].bids] == [(100.0, 5.0), (99.9, 3.0)]
+    assert [(l.price, l.size) for l in loaded[0].asks] == [(100.1, 4.0), (100.2, 2.0)]
+    store.close()
+
+
+def test_load_snapshots_ignores_other_markets(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(market="SOL-PERP", ts=1.0), [], persist_snapshot=True)
+    store.record_tick("BTC-PERP", snap(market="BTC-PERP", ts=1.0), [], persist_snapshot=True)
+
+    assert len(store.load_snapshots("SOL-PERP")) == 1
+    assert len(store.load_snapshots("BTC-PERP")) == 1
+    assert store.load_snapshots("ETH-PERP") == []
+    store.close()
+
+
+def test_load_snapshots_empty_without_persist_snapshots(tmp_path):
+    store = make_store(tmp_path)
+    store.record_tick("SOL-PERP", snap(), [det()], risk=0.5, persist_snapshot=False)
+    assert store.load_snapshots("SOL-PERP") == []
+    store.close()
+
+
 def test_record_tick_visible_without_explicit_commit(tmp_path):
     # record_tick batches writes into a single commit; readers on the same
     # connection must still see the rows without the caller calling close().

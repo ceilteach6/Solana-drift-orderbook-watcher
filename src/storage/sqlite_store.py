@@ -198,6 +198,35 @@ class SQLiteStore(Store):
     def risk_series(self, market: str, limit: int = 2000):
         return self._series("score", market, limit)
 
+    def load_snapshots(self, market: str, limit: int = 5000):
+        """Reconstruct persisted L2 books for ``market``, oldest -> newest.
+
+        Only rows written with ``PERSIST_SNAPSHOTS=true`` populate the
+        ``snapshots`` table — with it off this returns an empty list. Feeds
+        :mod:`src.replay`, which needs the raw book (not just the derived
+        mid/risk series) to re-run detectors against recorded market data.
+        """
+        # Imported locally, not at module level: sqlite_store otherwise has no
+        # dependency on the collector layer, and importing OrderbookSnapshot
+        # only for this one read path shouldn't force that coupling on every
+        # caller of the module (e.g. the dashboard server, which never needs
+        # it).
+        from src.collector.orderbook_feed import Level, OrderbookSnapshot
+
+        cur = self._conn.execute(
+            "SELECT ts, bids, asks FROM snapshots WHERE market = ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (market, limit),
+        )
+        rows = list(cur.fetchall())
+        rows.reverse()  # ascending, so replay sees oldest -> newest
+        out = []
+        for r in rows:
+            bids = [Level(p, s) for p, s in json.loads(r["bids"])]
+            asks = [Level(p, s) for p, s in json.loads(r["asks"])]
+            out.append(OrderbookSnapshot(market=market, timestamp=r["ts"], bids=bids, asks=asks))
+        return out
+
     def detection_markers(self, market: str, limit: int = 200):
         cur = self._conn.execute(
             "SELECT CAST(ts AS INTEGER) AS sec, detector, score, message FROM detections "
