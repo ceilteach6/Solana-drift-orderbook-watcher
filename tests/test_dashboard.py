@@ -60,3 +60,22 @@ def test_normal_limit_still_works(dashboard):
     status, body = _get(f"{dashboard}/api/series?market=SOL-PERP&limit=5")
     assert status == 200
     assert len(body["risk"]) <= 5
+
+
+def test_root_route_ignores_bad_limit(dashboard):
+    """`/` doesn't consume `limit` — a stray/malformed value must not 400 it."""
+    with urllib.request.urlopen(f"{dashboard}/?limit=abc", timeout=5) as resp:
+        assert resp.status == 200
+
+
+def test_markets_route_ignores_bad_limit(dashboard):
+    """`/api/markets` doesn't consume `limit` either."""
+    status, body = _get(f"{dashboard}/api/markets?limit=-1")
+    assert status == 200
+    assert body == ["SOL-PERP"]
+
+
+def test_series_route_still_validates_limit(dashboard):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(f"{dashboard}/api/series?market=SOL-PERP&limit=abc")
+    assert excinfo.value.code == 400
