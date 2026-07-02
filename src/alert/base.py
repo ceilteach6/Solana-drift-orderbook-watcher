@@ -40,6 +40,17 @@ class AlertDispatcher:
         emitted = 0
         for d in detections:
             if d.score < self.settings.alert_min_score:
+                # Logged (not just silently dropped): when this is a risk
+                # aggregator Detection, the aggregator has already latched
+                # its own internal "alerting"/cooldown state believing the
+                # alert went out. A misconfigured ALERT_MIN_SCORE above
+                # RISK_ALERT_THRESHOLD would otherwise desync those two
+                # gates with zero diagnostic signal — see Settings
+                # .__post_init__ for the belt-and-suspenders config check.
+                logger.debug(
+                    "Dropping %s detection for %s: score %.3f < ALERT_MIN_SCORE %.3f",
+                    d.detector, d.market, d.score, self.settings.alert_min_score,
+                )
                 continue
             for sink in self.sinks:
                 try:

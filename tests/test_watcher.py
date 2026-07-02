@@ -104,6 +104,50 @@ def test_healthcheck_survives_a_broken_alert_sink(monkeypatch):
     watcher._maybe_healthcheck()
 
 
+class _RecordingCloseStore:
+    def __init__(self):
+        self.connected = False
+        self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_start_closes_the_store_even_when_feed_creation_fails(monkeypatch):
+    # Regression: store.connect() used to run before the try/finally guarding
+    # cleanup, so a failure (or a cancellation landing mid-await) between
+    # store.connect() and entering the try block left the SQLite connection
+    # open for the rest of the process's life.
+    import src.watcher as watcher_module
+
+    async def boom(settings):
+        raise RuntimeError("simulated feed connection failure")
+
+    monkeypatch.setattr(watcher_module, "create_feed", boom)
+
+    watcher = object.__new__(Watcher)
+    watcher.settings = SimpleNamespace(healthcheck_enabled=False)
+    watcher.store = _RecordingCloseStore()
+    watcher.feed = None
+    watcher.detectors = []
+    watcher.alert = _BoomAlert()
+    watcher.aggregator = None
+    watcher._banner = lambda: None
+
+    try:
+        asyncio.run(watcher.start())
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected the simulated feed failure to propagate")
+
+    assert watcher.store.connected
+    assert watcher.store.closed
+
+
 def test_persist_runs_the_blocking_store_write_off_the_event_loop():
     # Regression: _persist used to call store.record_tick() directly inside
     # the async _tick(), so its blocking commit()/fsync ran on the event loop

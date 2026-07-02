@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,6 +30,19 @@ logger = logging.getLogger(__name__)
 # firing across many markets in one tick) can't spawn unbounded threads —
 # excess deliveries queue instead of piling up as raw OS threads.
 _DELIVERY_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="webhook-alert")
+
+# ThreadPoolExecutor.submit() never blocks or rejects — its internal work
+# queue is unbounded. During a sustained outage (bad URL, target down, DNS
+# hang near the request timeout) the 8 workers drain at most ~8 requests per
+# timeout window, but every tick keeps calling deliver(), so the backlog
+# behind them would otherwise grow for as long as the process runs. This
+# semaphore caps how many deliveries can be queued-or-in-flight at once;
+# anything beyond that is dropped (rate-limited log) instead of queued, so a
+# webhook outage degrades gracefully instead of leaking memory.
+_MAX_QUEUED = 64
+_queue_slots = threading.Semaphore(_MAX_QUEUED)
+_last_overflow_log = 0.0
+_OVERFLOW_LOG_INTERVAL_SEC = 30.0
 
 
 class WebhookAlert(Alert):
@@ -47,18 +62,39 @@ class WebhookAlert(Alert):
         payload, url = self._build_request(detection)
         if not url:
             return
-        _DELIVERY_POOL.submit(self._send, payload, url)
+        if not _queue_slots.acquire(blocking=False):
+            self._log_overflow()
+            return
+        try:
+            _DELIVERY_POOL.submit(self._send, payload, url)
+        except Exception:
+            _queue_slots.release()
+            raise
+
+    @staticmethod
+    def _log_overflow() -> None:
+        global _last_overflow_log
+        now = time.monotonic()
+        if now - _last_overflow_log >= _OVERFLOW_LOG_INTERVAL_SEC:
+            _last_overflow_log = now
+            logger.warning(
+                "Webhook delivery backlog full (%d queued/in-flight) — dropping "
+                "alert; target may be down or slow.", _MAX_QUEUED,
+            )
 
     def _send(self, payload: dict, url: str) -> None:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"}
-        )
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
-                resp.read()
-        except Exception as exc:
-            logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+                    resp.read()
+            except Exception as exc:
+                logger.warning("Webhook delivery failed (%s): %s", self._target(), exc)
+        finally:
+            _queue_slots.release()
 
     # --- formatting per target ------------------------------------------- #
     def _text(self, d) -> str:

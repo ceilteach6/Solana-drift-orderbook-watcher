@@ -139,6 +139,39 @@ class Settings:
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
             )
+        # RiskAggregator.update() decides to emit (and latches its own
+        # _alerting/_last_emit state as if delivery happened) purely based on
+        # RISK_ALERT_THRESHOLD. AlertDispatcher.emit() then independently
+        # re-filters on ALERT_MIN_SCORE. If the latter is stricter, a
+        # crossing the aggregator considers "alert-worthy" gets silently
+        # dropped at delivery *and* the aggregator's cooldown/hysteresis gate
+        # is now desynced from what actually reached a sink — the market can
+        # go quiet indefinitely with no error. Reject that combination
+        # up front instead of letting it fail silently at runtime.
+        if self.risk_aggregation and self.alert_min_score > self.risk_alert_threshold:
+            raise ValueError(
+                "ALERT_MIN_SCORE must be <= RISK_ALERT_THRESHOLD when "
+                "RISK_AGGREGATION is enabled, or every risk alert the "
+                "aggregator decides to emit is silently dropped by the "
+                f"dispatcher (got alert_min_score={self.alert_min_score}, "
+                f"risk_alert_threshold={self.risk_alert_threshold})"
+            )
+        # Several detectors divide by these thresholds when scoring
+        # (count / (min_threshold * 2), price_move / (2 * min_price_move));
+        # 0 raises ZeroDivisionError on the first snapshot instead of the
+        # "disabled" behavior a 0 reads as elsewhere in this config (e.g.
+        # imbalance_min_total_volume). Reject at startup, not on every tick.
+        for name, value in (
+            ("REPEATED_MIN_COUNT", self.repeated_min_count),
+            ("LAYERING_MIN_LEVELS", self.layering_min_levels),
+            ("FLICKER_MIN_EVENTS", self.flicker_min_events),
+        ):
+            if value < 1:
+                raise ValueError(f"{name} must be >= 1 (got {value})")
+        if self.spoof_min_price_move <= 0:
+            raise ValueError(
+                f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move})"
+            )
         _validate_webhook_url(
             self.alert_webhook_url,
             allow_private_host=self.alert_webhook_allow_private_host,
