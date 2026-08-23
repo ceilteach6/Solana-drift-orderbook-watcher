@@ -16,7 +16,7 @@ import time
 from collections import deque
 
 from src.alert import AlertDispatcher, build_alert_sinks
-from src.collector.orderbook_feed import create_feed
+from src.collector.orderbook_feed import DriftOrderbookFeed, create_feed
 from src.detector import DEFAULT_DETECTORS
 from src.detector.base import Detection
 from src.risk import RiskAggregator
@@ -48,6 +48,14 @@ class Watcher:
         self.store = SQLiteStore(settings.db_path) if settings.storage_enabled else None
         self.feed = None
         self._last_healthcheck: float = 0.0
+        # Feed liveness: a snapshot exception/None is caught and logged per
+        # tick (so one bad poll can't kill the watcher), but that same
+        # isolation means an RPC that never recovers would otherwise poll
+        # forever without anyone ever finding out. These two counters turn
+        # "keeps failing" into an actual reconnect, and "hasn't succeeded in
+        # a while" into an alertable health-check signal.
+        self._feed_consecutive_failures: int = 0
+        self._last_snapshot_ok: float = 0.0
 
         history_len = history_length(settings)
         self._history: dict[str, deque] = {
@@ -81,6 +89,7 @@ class Watcher:
         start = time.monotonic()
         duration = self.settings.run_duration_sec
         self._last_healthcheck = start
+        self._last_snapshot_ok = start
 
         while True:
             for market in self.settings.markets:
@@ -100,6 +109,31 @@ class Watcher:
         if now - self._last_healthcheck < self.settings.healthcheck_interval_sec:
             return
         self._last_healthcheck = now
+
+        # run_selftest() exercises detector *logic* against hand-built
+        # scenarios, deliberately independent of the live feed — so it
+        # reports "OK" just as happily whether the real Drift connection is
+        # healthy or has been dead for hours. Check actual feed liveness as
+        # its own signal instead of folding it into (or omitting it from)
+        # the self-test.
+        try:
+            stale_for = now - self._last_snapshot_ok
+            if stale_for > self.settings.feed_stale_after_sec:
+                logger.warning(
+                    "Health-check FAILED: no successful orderbook snapshot in %.0fs",
+                    stale_for,
+                )
+                self.alert.emit([
+                    Detection(
+                        detector="healthcheck",
+                        market="-",
+                        score=1.0,
+                        message=f"Live feed stale: no successful snapshot in {stale_for:.0f}s",
+                        details={"stale_for_sec": stale_for},
+                    )
+                ])
+        except Exception:
+            logger.exception("Health-check feed-liveness check failed")
 
         try:
             results = run_selftest(self.settings)
@@ -127,9 +161,14 @@ class Watcher:
             snapshot = await self.feed.get_snapshot(market)
         except Exception as exc:  # one bad poll shouldn't kill the watcher
             logger.warning("Snapshot failed for %s: %s", market, exc)
+            await self._note_feed_failure()
             return
         if snapshot is None:
+            await self._note_feed_failure()
             return
+
+        self._feed_consecutive_failures = 0
+        self._last_snapshot_ok = time.monotonic()
 
         history = self._history[market]
         detections = []
@@ -155,6 +194,58 @@ class Watcher:
             logger.exception("Risk aggregation / alert emission failed for %s", market)
 
         await self._persist(market, snapshot, detections)
+
+    async def _note_feed_failure(self) -> None:
+        self._feed_consecutive_failures += 1
+        if self._feed_consecutive_failures < self.settings.feed_max_consecutive_failures:
+            return
+        # Reset immediately, win or lose: a reconnect attempt itself may keep
+        # failing (RPC still down), and without this the counter would stay
+        # pinned at/above the threshold and re-trigger a reconnect on every
+        # single tick instead of waiting for another full failure streak.
+        self._feed_consecutive_failures = 0
+        await self._reconnect_feed()
+
+    async def _reconnect_feed(self) -> None:
+        # The synthetic feed is a local generator, not a network connection —
+        # it has nothing to reconnect and its "failures" (if any) would be a
+        # bug, not an outage a retry could fix.
+        if not isinstance(self.feed, DriftOrderbookFeed):
+            return
+        logger.warning(
+            "Feed unhealthy (%d consecutive snapshot failures) — reconnecting.",
+            self.settings.feed_max_consecutive_failures,
+        )
+        old_feed = self.feed
+        try:
+            new_feed = DriftOrderbookFeed(self.settings)
+            await new_feed.connect()
+        except Exception:
+            # Deliberately do NOT fall back to create_feed()'s synthetic
+            # feed here: that fallback exists so the tool still runs when
+            # driftpy is unavailable at *startup*. Silently switching a
+            # previously-live connection to fake data mid-run would make the
+            # watcher look healthy while alerting on data nobody generated —
+            # worse than the outage it would be masking. Keep polling the
+            # old (broken) feed and let the next failure streak retry.
+            logger.exception("Feed reconnect failed; will retry on the next failure streak")
+            self.alert.emit([
+                Detection(
+                    detector="healthcheck",
+                    market="-",
+                    score=1.0,
+                    message="Feed reconnect failed — live data may be unavailable",
+                    details={},
+                )
+            ])
+            return
+        self.feed = new_feed
+        self._last_snapshot_ok = time.monotonic()
+        logger.info("Feed reconnected.")
+        try:
+            await old_feed.close()
+        except Exception:
+            logger.exception("Error closing previous feed connection after reconnect")
 
     async def _persist(self, market: str, snapshot, detections) -> None:
         if self.store is None:

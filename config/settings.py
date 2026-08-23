@@ -110,6 +110,16 @@ class Settings:
     healthcheck_enabled: bool = False
     healthcheck_interval_sec: float = 300.0
 
+    # --- Feed liveness / reconnect ---
+    # After this many consecutive failed snapshot polls, the watcher tears
+    # down and rebuilds the live Drift connection instead of polling a
+    # connection that's never coming back on its own.
+    feed_max_consecutive_failures: int = 5
+    # Health-check alerts if no snapshot has succeeded in this many seconds —
+    # independent of healthcheck_interval_sec so it can be tuned without
+    # changing how often the self-test itself runs.
+    feed_stale_after_sec: float = 120.0
+
     # --- Storage (time-series persistence) ---
     storage_enabled: bool = False
     db_path: str = "data/watcher.db"
@@ -138,6 +148,80 @@ class Settings:
             raise ValueError(
                 "RISK_CLEAR_THRESHOLD must be < RISK_ALERT_THRESHOLD "
                 f"(got clear={self.risk_clear_threshold}, alert={self.risk_alert_threshold})"
+            )
+        # Every detector's "min count/levels/events" threshold is used as a
+        # divisor (or an implicit non-empty-cluster guard) in its scoring
+        # math. A value <= 0 isn't a stricter/looser threshold — it's a
+        # guaranteed ZeroDivisionError/IndexError on the next tick that has
+        # any data, which silently disables that detector for the rest of
+        # the run (caught and logged per-detector in Watcher._tick). Fail
+        # fast here instead, at the config boundary.
+        for field_name, value in (
+            ("REPEATED_MIN_COUNT", self.repeated_min_count),
+            ("LAYERING_MIN_LEVELS", self.layering_min_levels),
+            ("FLICKER_MIN_EVENTS", self.flicker_min_events),
+        ):
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1 (got {value})")
+        if self.spoof_min_price_move <= 0:
+            raise ValueError(
+                f"SPOOF_MIN_PRICE_MOVE must be > 0 (got {self.spoof_min_price_move}); "
+                "it is used as a divisor in spoof_pull's scoring"
+            )
+        if self.spoof_wall_ratio <= 0:
+            raise ValueError(
+                f"SPOOF_WALL_RATIO must be > 0 (got {self.spoof_wall_ratio}); "
+                "spoof_pull multiplies it against the median level size to pick "
+                "a wall threshold — a value <= 0 makes every level (including "
+                "dust) qualify as a 'wall', turning ordinary price movement "
+                "into a stream of false-positive spoof alerts instead of the "
+                "increased sensitivity a lower value is meant to give"
+            )
+        if self.feed_max_consecutive_failures < 1:
+            raise ValueError(
+                f"FEED_MAX_CONSECUTIVE_FAILURES must be >= 1 "
+                f"(got {self.feed_max_consecutive_failures})"
+            )
+        if self.feed_stale_after_sec <= 0:
+            raise ValueError(
+                f"FEED_STALE_AFTER_SEC must be > 0 (got {self.feed_stale_after_sec})"
+            )
+        if self.update_frequency_ms < 1:
+            raise ValueError(
+                f"UPDATE_FREQUENCY_MS must be >= 1 (got {self.update_frequency_ms}); "
+                "a value <= 0 turns the poll loop into a tight busy-loop against the RPC"
+            )
+        if not 0.0 <= self.risk_smoothing <= 1.0:
+            raise ValueError(
+                f"RISK_SMOOTHING must be within [0, 1] (got {self.risk_smoothing}); "
+                "it is an EMA alpha and a value outside this range lets the smoothed "
+                "risk score escape [0, 1], breaking the alert/clear hysteresis"
+            )
+        # Both flicker and spoof-pull only ever look at *prior* snapshots that
+        # fall within their own window (see src/detector/flicker.py and
+        # spoof_pull.py); which prior snapshots exist is entirely a function
+        # of the poll interval. If the window is too small relative to
+        # UPDATE_FREQUENCY_MS, not enough snapshots (or not enough
+        # transitions) can ever land inside it, and the detector silently
+        # never fires again — no error, indistinguishable from "market is
+        # quiet". This is invisible at review time since the three settings
+        # live in unrelated sections of the config.
+        interval_sec = self.update_frequency_ms / 1000.0
+        min_flicker_window = self.flicker_min_events * interval_sec
+        if self.flicker_window_sec < min_flicker_window:
+            raise ValueError(
+                f"FLICKER_WINDOW_SEC ({self.flicker_window_sec}s) is too small for "
+                f"FLICKER_MIN_EVENTS={self.flicker_min_events} at UPDATE_FREQUENCY_MS="
+                f"{self.update_frequency_ms} ({interval_sec:.3f}s/poll); needs >= "
+                f"{min_flicker_window:.3f}s, or fewer than {self.flicker_min_events} "
+                "transitions can ever land inside the window and flicker can never fire"
+            )
+        if self.spoof_window_sec < interval_sec:
+            raise ValueError(
+                f"SPOOF_WINDOW_SEC ({self.spoof_window_sec}s) is smaller than the poll "
+                f"interval (UPDATE_FREQUENCY_MS={self.update_frequency_ms} -> "
+                f"{interval_sec:.3f}s); no prior snapshot can ever fall inside the "
+                "window and spoof-pull can never fire"
             )
         _validate_webhook_url(
             self.alert_webhook_url,
@@ -179,6 +263,8 @@ def load_settings() -> Settings:
         healthcheck_enabled=_get_str("HEALTHCHECK_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         healthcheck_interval_sec=_get_float("HEALTHCHECK_INTERVAL_SEC", 300.0),
+        feed_max_consecutive_failures=_get_int("FEED_MAX_CONSECUTIVE_FAILURES", 5),
+        feed_stale_after_sec=_get_float("FEED_STALE_AFTER_SEC", 120.0),
         storage_enabled=_get_str("STORAGE_ENABLED", "false").lower()
         in ("1", "true", "yes", "on"),
         db_path=_get_str("DB_PATH", "data/watcher.db"),

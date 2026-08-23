@@ -305,5 +305,23 @@ def test_spoof_pull_fires_on_a_lone_resting_level_pulled():
     assert detections[0].details["wall_size"] == 50.0
 
 
+def test_spoof_pull_fires_when_current_mid_is_exactly_zero():
+    # Regression: `if not mid_now` treated a legitimate mid of exactly 0.0 as
+    # "no price data" and bailed out of analyze() entirely, silently
+    # disabling spoof-pull detection for that tick. mid_now (unlike
+    # mid_then) isn't used as a divisor anywhere in this method, so it must
+    # use an `is None` check instead.
+    det = SpoofPullDetector(make_settings())
+    prior = _prior_with_bid_wall(ts=0.0)  # mid_then = 100.0, bid wall @ 99.5
+    current = snap(
+        bids=[(-1.0, 1.0), (-2.0, 1.0)],  # 99.5 wall pulled; mid == 0.0
+        asks=[(1.0, 1.0), (2.0, 1.0)],
+        ts=1.0,
+    )
+    detections = det.analyze(current, [prior])
+    assert len(detections) == 1
+    assert detections[0].details["side"] == "bid"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
